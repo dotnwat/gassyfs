@@ -431,10 +431,10 @@ int main(int argc, char *argv[])
   GASNET_SAFE(gasnet_attach(NULL, 0, segsz, 0));
 
   if (gasnet_mynode()) {
-    gasnet_barrier_notify(0,GASNET_BARRIERFLAG_ANONYMOUS);
-    gasnet_barrier_wait(0,GASNET_BARRIERFLAG_ANONYMOUS);
+    gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
+    gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_exit(0);
-    exit(0);
+    return 0;
   }
 
   assert(gasnet_mynode() == 0);
@@ -490,5 +490,11 @@ hello_ll_oper.forget = ll_forget;
 	}
 	fuse_opt_free_args(&args);
 
-	return err ? 1 : 0;
+
+  gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
+  gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
+
+  int rv = err ? 1 : 0;
+  gasnet_exit(rv);
+  return rv;
 }
