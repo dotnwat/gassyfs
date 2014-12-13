@@ -286,7 +286,7 @@ static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
   fuse_reply_none(req);
 }
 
-static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino,
+static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
 {
   printf("getattr: ino:%lu\n", ino);
@@ -303,7 +303,7 @@ static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino,
   pthread_mutex_unlock(&mutex);
 }
 
-static void hello_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
+static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
 	printf("lookup: parent:%lu, name:%s\n", parent, name);
     fflush(0);
@@ -364,7 +364,7 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
 /*
  *
  */
-static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
+static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 			     off_t off, struct fuse_file_info *fi)
 {
   assert(ino == FUSE_ROOT_ID);
@@ -391,7 +391,7 @@ static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
   pthread_mutex_unlock(&mutex);
 }
 
-static void hello_ll_open(fuse_req_t req, fuse_ino_t ino,
+static void ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
 {
   printf("open: %lu\n", ino);
@@ -411,7 +411,7 @@ static void hello_ll_open(fuse_req_t req, fuse_ino_t ino,
   pthread_mutex_unlock(&mutex);
 }
 
-static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
+static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 			  off_t off, struct fuse_file_info *fi)
 {
 	(void) fi;
@@ -449,17 +449,18 @@ int main(int argc, char *argv[])
 	char *mountpoint;
 	int err = -1;
 
-  struct fuse_lowlevel_ops hello_ll_oper;
-  memset(&hello_ll_oper, 0, sizeof(hello_ll_oper));
-hello_ll_oper.lookup=		 hello_ll_lookup;
-hello_ll_oper.getattr=	 hello_ll_getattr;
-hello_ll_oper.readdir=	 hello_ll_readdir;
-hello_ll_oper.open=		 hello_ll_open;
-hello_ll_oper.read=		 hello_ll_read;
-hello_ll_oper.create=		 ll_create;
-hello_ll_oper.release = ll_release;
-hello_ll_oper.unlink = ll_unlink;
-hello_ll_oper.forget = ll_forget;
+  // Operation registry
+  struct fuse_lowlevel_ops ll_oper;
+  memset(&ll_oper, 0, sizeof(ll_oper));
+  ll_oper.lookup      = ll_lookup;
+  ll_oper.getattr     = ll_getattr;
+  ll_oper.readdir     = ll_readdir;
+  ll_oper.open        = ll_open;
+  ll_oper.read        = ll_read;
+  ll_oper.create      = ll_create;
+  ll_oper.release     = ll_release;
+  ll_oper.unlink      = ll_unlink;
+  ll_oper.forget      = ll_forget;
 
   pthread_mutex_init(&mutex, NULL);
 
@@ -475,8 +476,8 @@ hello_ll_oper.forget = ll_forget;
 	    (ch = fuse_mount(mountpoint, &args)) != NULL) {
 		struct fuse_session *se;
 
-		se = fuse_lowlevel_new(&args, &hello_ll_oper,
-				       sizeof(hello_ll_oper), NULL);
+		se = fuse_lowlevel_new(&args, &ll_oper,
+				       sizeof(ll_oper), NULL);
 		if (se != NULL) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
