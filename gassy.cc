@@ -718,3 +718,68 @@ int main(int argc, char *argv[])
   gasnet_exit(rv);
   return rv;
 }
+
+#if 0
+  // not a huge priority
+	void (*init) (void *userdata, struct fuse_conn_info *conn);
+	void (*destroy) (void *userdata);
+	void (*setattr) (fuse_req_t req, fuse_ino_t ino, struct stat *attr,
+			 int to_set, struct fuse_file_info *fi);
+	void (*readlink) (fuse_req_t req, fuse_ino_t ino);
+	void (*mknod) (fuse_req_t req, fuse_ino_t parent, const char *name,
+		       mode_t mode, dev_t rdev);
+	void (*mkdir) (fuse_req_t req, fuse_ino_t parent, const char *name,
+		       mode_t mode);
+	void (*rmdir) (fuse_req_t req, fuse_ino_t parent, const char *name);
+	void (*symlink) (fuse_req_t req, const char *link, fuse_ino_t parent,
+			 const char *name);
+	void (*link) (fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
+		      const char *newname);
+	void (*opendir) (fuse_req_t req, fuse_ino_t ino,
+			 struct fuse_file_info *fi);
+	void (*releasedir) (fuse_req_t req, fuse_ino_t ino,
+			    struct fuse_file_info *fi);
+	void (*setxattr) (fuse_req_t req, fuse_ino_t ino, const char *name,
+			  const char *value, size_t size, int flags);
+	void (*getxattr) (fuse_req_t req, fuse_ino_t ino, const char *name,
+			  size_t size);
+	void (*removexattr) (fuse_req_t req, fuse_ino_t ino, const char *name);
+	void (*listxattr) (fuse_req_t req, fuse_ino_t ino, size_t size);
+	void (*getlk) (fuse_req_t req, fuse_ino_t ino,
+		       struct fuse_file_info *fi, struct flock *lock);
+	void (*setlk) (fuse_req_t req, fuse_ino_t ino,
+		       struct fuse_file_info *fi,
+		       struct flock *lock, int sleep);
+	void (*bmap) (fuse_req_t req, fuse_ino_t ino, size_t blocksize,
+		      uint64_t idx);
+	void (*poll) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi,
+		      struct fuse_pollhandle *ph);
+	void (*flock) (fuse_req_t req, fuse_ino_t ino,
+		       struct fuse_file_info *fi, int op);
+
+  // easy and priority
+	void (*rename) (fuse_req_t req, fuse_ino_t parent, const char *name,
+			fuse_ino_t newparent, const char *newname);
+	void (*fsync) (fuse_req_t req, fuse_ino_t ino, int datasync,
+		       struct fuse_file_info *fi);
+	void (*fsyncdir) (fuse_req_t req, fuse_ino_t ino, int datasync,
+			  struct fuse_file_info *fi);
+	void (*statfs) (fuse_req_t req, fuse_ino_t ino);
+	void (*access) (fuse_req_t req, fuse_ino_t ino, int mask);
+	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
+		       off_t offset, off_t length, struct fuse_file_info *fi);
+
+  // harder and priority
+	void (*write_buf) (fuse_req_t req, fuse_ino_t ino,
+			   struct fuse_bufvec *bufv, off_t off,
+			   struct fuse_file_info *fi);
+	void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino,
+				off_t offset, struct fuse_bufvec *bufv);
+	void (*forget_multi) (fuse_req_t req, size_t count,
+			      struct fuse_forget_data *forgets);
+
+  // v2
+	void (*ioctl) (fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
+		       struct fuse_file_info *fi, unsigned flags,
+		       const void *in_buf, size_t in_bufsz, size_t out_bufsz);
+#endif
