@@ -317,8 +317,8 @@ class Gassy {
   /*
    *
    */
-  void PathNames(std::vector<std::string>& names) const {
-    MutexLock l(&mutex);
+  void PathNames(std::vector<std::string>& names) {
+    MutexLock l(&mutex_);
 
     std::vector<std::string> v;
     for (std::map<std::string, Inode*>::const_iterator it = path_to_inode_.begin();
