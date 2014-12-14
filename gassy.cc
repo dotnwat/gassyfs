@@ -155,44 +155,198 @@ class BlockAllocator {
   Mutex mutex_;
 };
 
-
-class Inode;
-static std::map<fuse_ino_t, Inode*> ino_inodes;
-
+/*
+ *
+ */
 class Inode {
  public:
-  Inode() : ref_(1) {}
+  explicit Inode(fuse_ino_t ino) :
+    ino_(ino), ref_(1)
+  {
+    memset(&i_st, 0, sizeof(i_st));
+  }
 
   void get() {
     assert(ref_);
     ref_++;
-    printf("get: ino:%lu ref:%ld\n", ino, ref_);
-    fflush(0);
   }
 
-  void put(long int dec = 1) {
+  bool put(long int dec = 1) {
     assert(ref_);
     ref_ -= dec;
     assert(ref_ >= 0);
-    printf("put: ino:%lu ref:%ld\n", ino, ref_);
-    fflush(0);
-    if (ref_ == 0) {
-      assert(ino_inodes.count(ino));
-      ino_inodes.erase(ino);
-      delete this;
-    }
+    if (ref_ == 0)
+      return false;
+    return true;
   }
 
-  fuse_ino_t ino;
+  fuse_ino_t ino() const {
+    return ino_;
+  }
+
   struct stat i_st;
 
  private:
+  fuse_ino_t ino_;
   long int ref_;
 };
 
-static std::map<std::string, Inode*> path_inodes;
-static fuse_ino_t next_inode_num = FUSE_ROOT_ID + 1;
-static pthread_mutex_t mutex;
+/*
+ *
+ */
+class Gassy {
+ public:
+  Gassy() :
+    next_ino_(FUSE_ROOT_ID + 1)
+  {
+    // setup root inode
+    // TODO: path_to_inode for root?
+    Inode *root = new Inode(FUSE_ROOT_ID);
+    root->i_st.st_mode = S_IFDIR | 0755;
+    root->i_st.st_nlink = 2;
+    ino_to_inode_[root->ino()] = root;
+  }
+
+  /*
+   *
+   */
+  int Create(const std::string& name, mode_t mode, int flags, struct stat *st) {
+    MutexLock l(&mutex_);
+
+    std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
+    if (it != path_to_inode_.end())
+      return -EEXIST;
+
+    Inode *in = new Inode(next_ino_++);
+    in->get();
+
+    path_to_inode_[name] = in;
+    ino_to_inode_[in->ino()] = in;
+
+    in->i_st.st_ino = in->ino();
+    in->i_st.st_mode = S_IFREG | 0666;
+    in->i_st.st_nlink = 1;
+    in->i_st.st_blksize = 4096;
+
+    *st = in->i_st;
+
+    return 0;
+  }
+
+  /*
+   *
+   */
+  int GetAttr(fuse_ino_t ino, struct stat *st) {
+    MutexLock l(&mutex_);
+
+    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    if (it == ino_to_inode_.end())
+      return -ENOENT;
+
+    Inode *in = it->second;
+    *st = in->i_st;
+
+    return 0;
+  }
+
+  /*
+   *
+   */
+  int Unlink(const std::string& name) {
+    MutexLock l(&mutex_);
+
+    std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
+    if (it == path_to_inode_.end())
+      return -ENOENT;
+
+    path_to_inode_.erase(name);
+
+    return 0;
+  }
+
+  /*
+   *
+   */
+  int Lookup(const std::string& name, struct stat *st) {
+    MutexLock l(&mutex_);
+
+    std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
+    if (it == path_to_inode_.end())
+      return -ENOENT;
+
+    Inode *in = it->second;
+    in->get();
+
+    *st = in->i_st;
+
+    return 0;
+  }
+
+  /*
+   *
+   */
+  int Open(fuse_ino_t ino) {
+    MutexLock l(&mutex_);
+
+    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    if (it == ino_to_inode_.end())
+      return -ENOENT;
+
+    Inode *in = it->second;
+    in->get();
+
+    return 0;
+  }
+
+  /*
+   *
+   */
+  void Release(fuse_ino_t ino) {
+    MutexLock l(&mutex_);
+    put_inode(ino);
+  }
+
+  /*
+   *
+   */
+  void Forget(fuse_ino_t ino, long unsigned nlookup) {
+    MutexLock l(&mutex_);
+    put_inode(ino, nlookup);
+  }
+
+  /*
+   *
+   */
+  void PathNames(std::vector<std::string>& names) const {
+    MutexLock l(&mutex);
+
+    std::vector<std::string> v;
+    for (std::map<std::string, Inode*>::const_iterator it = path_to_inode_.begin();
+        it != path_to_inode_.end(); it++) {
+      v.push_back(it->first);
+    }
+    names.swap(v);
+  }
+
+ private:
+  /*
+   *
+   */
+  void put_inode(fuse_ino_t ino, long unsigned dec = 1) {
+    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    assert(it != ino_to_inode_.end());
+    Inode *in = it->second;
+    if (!in->put(dec)) {
+      ino_to_inode_.erase(ino);
+      delete in;
+    }
+  }
+
+  fuse_ino_t next_ino_;
+  Mutex mutex_;
+  std::map<std::string, Inode*> path_to_inode_;
+  std::map<fuse_ino_t, Inode*> ino_to_inode_;
+};
 
 /*
  *
@@ -200,135 +354,73 @@ static pthread_mutex_t mutex;
 static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 		mode_t mode, struct fuse_file_info *fi)
 {
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
   assert(parent == FUSE_ROOT_ID);
-
-	printf("create: parent:%lu name:%s\n", parent, name);
-    fflush(0);
-
-  pthread_mutex_lock(&mutex);
-
-  Inode *in;
-  std::string fname(name);
-  if (path_inodes.count(fname) == 0) {
-    in = new Inode;
-    memset(&in->i_st, 0, sizeof(in->i_st));
-    in->ino = next_inode_num++;
-    in->get();
-    path_inodes[fname] = in;
-    ino_inodes[in->ino] = in;
-  } else
-    assert(0);
-
-  in->i_st.st_ino = in->ino;
-  in->i_st.st_mode = S_IFREG | 0666;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
 
   struct fuse_entry_param fe;
   memset(&fe, 0, sizeof(fe));
 
-  fe.attr = in->i_st;
-  fe.ino = fe.attr.st_ino;
-  fe.generation = 1;
-  fe.entry_timeout = 1.0;
-
-	fuse_reply_create(req, &fe, fi);
-
-  pthread_mutex_unlock(&mutex);
+  int ret = fs->Create(name, mode, fi->flags, &fe.attr);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
+    fe.generation = 1;
+    fe.entry_timeout = 1.0;
+    fuse_reply_create(req, &fe, fi);
+  } else
+    fuse_reply_err(req, -ret);
 }
 
 static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
-  printf("release: %lu\n", ino);
-    fflush(0);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  pthread_mutex_lock(&mutex);
-  assert(ino_inodes.count(ino));
-
-  Inode *in = ino_inodes[ino];
-  in->put();
-
+  fs->Release(ino);
   fuse_reply_err(req, 0);
-
-  pthread_mutex_unlock(&mutex);
 }
 
 static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-  printf("unlink: parent:%lu name:%s\n", parent, name);
-    fflush(0);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  pthread_mutex_lock(&mutex);
-
-  std::string fname(name);
-  if (path_inodes.count(fname)) {
-    path_inodes.erase(fname);
-    fuse_reply_err(req, 0);
-  } else
-    fuse_reply_err(req, ENOENT);
-
-  pthread_mutex_unlock(&mutex);
+  int ret = fs->Unlink(name);
+  fuse_reply_err(req, -ret);
 }
 
 static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
 {
-  printf("forget: ino:%lu nlookup:%lu\n", ino, nlookup);
-  fflush(0);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  pthread_mutex_lock(&mutex);
-  assert(ino_inodes.count(ino));
-
-  Inode *in = ino_inodes[ino];
-  in->put(nlookup);
-
-  pthread_mutex_unlock(&mutex);
-
+  fs->Forget(ino, nlookup);
   fuse_reply_none(req);
 }
 
-static void hello_ll_getattr(fuse_req_t req, fuse_ino_t ino,
+static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
 {
-  printf("getattr: ino:%lu\n", ino);
-  fflush(0);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  struct stat st;
 
-  pthread_mutex_lock(&mutex);
-
-  if (ino_inodes.count(ino)) {
-    Inode *in = ino_inodes[ino];
-    fuse_reply_attr(req, &in->i_st, 0);
-  } else
-    fuse_reply_err(req, ENOENT);
-
-  pthread_mutex_unlock(&mutex);
+  int ret = fs->GetAttr(ino, &st);
+  if (ret == 0)
+    fuse_reply_attr(req, &st, ret);
+  else
+    fuse_reply_err(req, -ret);
 }
 
-static void hello_ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
+static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
-	printf("lookup: parent:%lu, name:%s\n", parent, name);
-    fflush(0);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  pthread_mutex_lock(&mutex);
+  struct fuse_entry_param fe;
+  memset(&fe, 0, sizeof(fe));
 
-  std::string fname(name);
-  if (path_inodes.count(fname)) {
-    Inode *in = path_inodes[fname];
-    assert(ino_inodes.count(in->ino));
-    assert(ino_inodes[in->ino] == in);
-
-    struct fuse_entry_param fe;
-    memset(&fe, 0, sizeof(fe));
-    fe.attr = in->i_st;
-    fe.ino = in->ino;
+  int ret = fs->Lookup(name, &fe.attr);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
     fe.generation = 1;
-    
-    in->get();
-
-		fuse_reply_entry(req, &fe);
+    fuse_reply_entry(req, &fe);
   } else
-		fuse_reply_err(req, ENOENT);
-
-  pthread_mutex_unlock(&mutex);
+    fuse_reply_err(req, -ret);
 }
 
 struct dirbuf {
@@ -364,15 +456,12 @@ static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
 /*
  *
  */
-static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
+static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 			     off_t off, struct fuse_file_info *fi)
 {
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
   assert(ino == FUSE_ROOT_ID);
-
-  printf("readdir: ino:%lu\n", ino);
-  fflush(0);
-
-  pthread_mutex_lock(&mutex);
 
   struct dirbuf b;
 
@@ -380,44 +469,34 @@ static void hello_ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
   dirbuf_add(req, &b, ".", 1);
   dirbuf_add(req, &b, "..", 1);
 
-  for (std::map<std::string, Inode*>::const_iterator it = path_inodes.begin();
-      it != path_inodes.end(); it++) {
-    dirbuf_add(req, &b, it->first.c_str(), strlen(it->first.c_str()));
+  std::vector<std::string> names;
+  fs->PathNames(names);
+
+  for (std::vector<std::string>::const_iterator it = names.begin(); it != names.end(); it++) {
+    dirbuf_add(req, &b, it->c_str(), strlen(it->c_str()));
   }
 
   reply_buf_limited(req, b.p, b.size, off, size);
   free(b.p);
-
-  pthread_mutex_unlock(&mutex);
 }
 
-static void hello_ll_open(fuse_req_t req, fuse_ino_t ino,
+static void ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
 {
-  printf("open: %lu\n", ino);
-  fflush(0);
-
-  pthread_mutex_lock(&mutex);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
   assert(!(fi->flags & O_CREAT));
 
-  if (ino_inodes.count(ino)) {
-    Inode *in = ino_inodes[ino];
-    in->get();
+  int ret = fs->Open(ino);
+  if (ret == 0)
     fuse_reply_open(req, fi);
-  } else
-		fuse_reply_err(req, ENOENT);
-
-  pthread_mutex_unlock(&mutex);
+  else
+		fuse_reply_err(req, -ret);
 }
 
-static void hello_ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
+static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
 			  off_t off, struct fuse_file_info *fi)
 {
-	(void) fi;
-	printf("read: %lu\n", ino);
-    fflush(0);
-
 	assert(ino == 2);
   static const char *hello_str = "asdf";
 	reply_buf_limited(req, hello_str, strlen(hello_str), off, size);
@@ -431,10 +510,10 @@ int main(int argc, char *argv[])
   GASNET_SAFE(gasnet_attach(NULL, 0, segsz, 0));
 
   if (gasnet_mynode()) {
-    gasnet_barrier_notify(0,GASNET_BARRIERFLAG_ANONYMOUS);
-    gasnet_barrier_wait(0,GASNET_BARRIERFLAG_ANONYMOUS);
+    gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
+    gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_exit(0);
-    exit(0);
+    return 0;
   }
 
   assert(gasnet_mynode() == 0);
@@ -449,34 +528,26 @@ int main(int argc, char *argv[])
 	char *mountpoint;
 	int err = -1;
 
-  struct fuse_lowlevel_ops hello_ll_oper;
-  memset(&hello_ll_oper, 0, sizeof(hello_ll_oper));
-hello_ll_oper.lookup=		 hello_ll_lookup;
-hello_ll_oper.getattr=	 hello_ll_getattr;
-hello_ll_oper.readdir=	 hello_ll_readdir;
-hello_ll_oper.open=		 hello_ll_open;
-hello_ll_oper.read=		 hello_ll_read;
-hello_ll_oper.create=		 ll_create;
-hello_ll_oper.release = ll_release;
-hello_ll_oper.unlink = ll_unlink;
-hello_ll_oper.forget = ll_forget;
+  // Operation registry
+  struct fuse_lowlevel_ops ll_oper;
+  memset(&ll_oper, 0, sizeof(ll_oper));
+  ll_oper.lookup      = ll_lookup;
+  ll_oper.getattr     = ll_getattr;
+  ll_oper.readdir     = ll_readdir;
+  ll_oper.open        = ll_open;
+  ll_oper.read        = ll_read;
+  ll_oper.create      = ll_create;
+  ll_oper.release     = ll_release;
+  ll_oper.unlink      = ll_unlink;
+  ll_oper.forget      = ll_forget;
 
-  pthread_mutex_init(&mutex, NULL);
-
-  // add root inode
-  Inode *root = new Inode;
-  root->ino = FUSE_ROOT_ID;
-  root->i_st.st_mode = S_IFDIR | 0755;
-  root->i_st.st_nlink = 2;
-  ino_inodes[root->ino] = root;
-
+  Gassy *fs = new Gassy;
 
 	if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
 	    (ch = fuse_mount(mountpoint, &args)) != NULL) {
 		struct fuse_session *se;
 
-		se = fuse_lowlevel_new(&args, &hello_ll_oper,
-				       sizeof(hello_ll_oper), NULL);
+		se = fuse_lowlevel_new(&args, &ll_oper, sizeof(ll_oper), fs);
 		if (se != NULL) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
@@ -490,5 +561,11 @@ hello_ll_oper.forget = ll_forget;
 	}
 	fuse_opt_free_args(&args);
 
-	return err ? 1 : 0;
+
+  gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
+  gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
+
+  int rv = err ? 1 : 0;
+  gasnet_exit(rv);
+  return rv;
 }
