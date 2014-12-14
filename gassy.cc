@@ -180,8 +180,23 @@ class Inode {
     return true;
   }
 
+  int set_capacity(off_t size, BlockAllocator *ba) {
+    while ((blks_.size()*BLOCK_SIZE) < (unsigned long)size) {
+      BlockAllocator::Block b;
+      int ret = ba->GetBlock(&b);
+      if (ret)
+        return ret;
+      blks_.push_back(b);
+    }
+    return 0;
+  }
+
   fuse_ino_t ino() const {
     return ino_;
+  }
+
+  const std::vector<BlockAllocator::Block>& blocks() const {
+    return blks_;
   }
 
   struct stat i_st;
@@ -189,6 +204,28 @@ class Inode {
  private:
   fuse_ino_t ino_;
   long int ref_;
+  std::vector<BlockAllocator::Block> blks_;
+};
+
+/*
+ *
+ */
+class FileHandle {
+ public:
+  FileHandle() :
+    pos_(0)
+  {}
+
+  off_t pos() const {
+    return pos_;
+  }
+
+  void skip(off_t s) {
+    pos_ += s;
+  }
+
+ private:
+  off_t pos_;
 };
 
 /*
@@ -196,8 +233,8 @@ class Inode {
  */
 class Gassy {
  public:
-  Gassy() :
-    next_ino_(FUSE_ROOT_ID + 1)
+  explicit Gassy(BlockAllocator *ba) :
+    next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
   {
     // setup root inode
     // TODO: path_to_inode for root?
@@ -328,6 +365,92 @@ class Gassy {
     names.swap(v);
   }
 
+  /*
+   *
+   */
+  ssize_t Write(fuse_ino_t ino, FileHandle *fh, off_t offset,
+      size_t size, const char *buf) {
+    MutexLock l(&mutex_);
+
+    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    if (it == ino_to_inode_.end())
+      return -ENOENT;
+
+    Inode *in = it->second;
+
+    int ret = in->set_capacity(offset + size, ba_);
+    if (ret)
+      return ret;
+
+    const off_t orig_offset = offset;
+    const char *src = buf;
+
+    size_t left = size;
+    while (left != 0) {
+      size_t blkid = offset / BLOCK_SIZE;
+      size_t blkoff = offset % BLOCK_SIZE;
+      size_t done = std::min(left, BLOCK_SIZE-blkoff);
+
+      const std::vector<BlockAllocator::Block>& blks = in->blocks();
+      assert(blkid < blks.size());
+      const BlockAllocator::Block& b = blks[blkid];
+      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+
+      left -= done;
+      src += done;
+      offset += done;
+    }
+
+    in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
+
+    fh->skip(size);
+
+    return size;
+  }
+
+  /*
+   *
+   */
+  ssize_t Read(fuse_ino_t ino, FileHandle *fh, off_t offset,
+      size_t size, char *buf) {
+    MutexLock l(&mutex_);
+
+    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    if (it == ino_to_inode_.end())
+      return -ENOENT;
+
+    Inode *in = it->second;
+
+    // don't read past eof
+    size_t left;
+    if ((offset + size) > in->i_st.st_size)
+      left = in->i_st.st_size - offset;
+    else
+      left = size;
+
+    const size_t new_n = left;
+
+    char *dest = buf;
+    while (left != 0) {
+      size_t blkid = offset / BLOCK_SIZE;
+      size_t blkoff = offset % BLOCK_SIZE;
+      size_t done = std::min(left, BLOCK_SIZE-blkoff);
+
+      const std::vector<BlockAllocator::Block>& blks = in->blocks();
+      assert(blkid < blks.size());
+      const BlockAllocator::Block& b = blks[blkid];
+      gasnet_get_bulk(dest, b.node, (void*)(b.addr + blkoff), done);
+
+      dest += done;
+      offset += done;
+      left -= done;
+    }
+
+    fh->skip(new_n);
+
+    return new_n;
+  }
+
  private:
   /*
    *
@@ -346,6 +469,7 @@ class Gassy {
   Mutex mutex_;
   std::map<std::string, Inode*> path_to_inode_;
   std::map<fuse_ino_t, Inode*> ino_to_inode_;
+  BlockAllocator *ba_;
 };
 
 /*
@@ -362,6 +486,7 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 
   int ret = fs->Create(name, mode, fi->flags, &fe.attr);
   if (ret == 0) {
+    fi->fh = (long)new FileHandle;
     fe.ino = fe.attr.st_ino;
     fe.generation = 1;
     fe.entry_timeout = 1.0;
@@ -373,7 +498,9 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  FileHandle *fh = (FileHandle*)fi->fh;
 
+  delete fh;
   fs->Release(ino);
   fuse_reply_err(req, 0);
 }
@@ -441,14 +568,14 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
 			  b->size);
 }
 
-#define min(x, y) ((x) < (y) ? (x) : (y))
+#define xmin(x, y) ((x) < (y) ? (x) : (y))
 
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
 			     off_t off, size_t maxsize)
 {
 	if (off < bufsize)
 		return fuse_reply_buf(req, buf + off,
-				      min(bufsize - off, maxsize));
+				      xmin(bufsize - off, maxsize));
 	else
 		return fuse_reply_buf(req, NULL, 0);
 }
@@ -488,18 +615,40 @@ static void ll_open(fuse_req_t req, fuse_ino_t ino,
   assert(!(fi->flags & O_CREAT));
 
   int ret = fs->Open(ino);
-  if (ret == 0)
+  if (ret == 0) {
+    fi->fh = (long)new FileHandle;
     fuse_reply_open(req, fi);
-  else
+  } else
 		fuse_reply_err(req, -ret);
 }
 
-static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size,
-			  off_t off, struct fuse_file_info *fi)
+static void ll_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
+    size_t size, off_t off, struct fuse_file_info *fi)
 {
-	assert(ino == 2);
-  static const char *hello_str = "asdf";
-	reply_buf_limited(req, hello_str, strlen(hello_str), off, size);
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  FileHandle *fh = (FileHandle*)fi->fh;
+
+  ssize_t ret = fs->Write(ino, fh, off, size, buf);
+  if (ret >= 0)
+    fuse_reply_write(req, ret);
+  else
+    fuse_reply_err(req, -ret);
+}
+
+static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
+    struct fuse_file_info *fi)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  FileHandle *fh = (FileHandle*)fi->fh;
+
+  char buf[1<<20];
+  size_t new_size = std::min(size, sizeof(buf));
+
+  ssize_t ret = fs->Read(ino, fh, off, new_size, buf);
+  if (ret >= 0)
+    fuse_reply_buf(req, buf, ret);
+  else
+    fuse_reply_err(req, -ret);
 }
 
 int main(int argc, char *argv[])
@@ -521,8 +670,6 @@ int main(int argc, char *argv[])
   gasnet_seginfo_t segments[gasnet_nodes()];
   GASNET_SAFE(gasnet_getSegmentInfo(segments, gasnet_nodes()));
 
-
-
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 	struct fuse_chan *ch;
 	char *mountpoint;
@@ -536,12 +683,14 @@ int main(int argc, char *argv[])
   ll_oper.readdir     = ll_readdir;
   ll_oper.open        = ll_open;
   ll_oper.read        = ll_read;
+  ll_oper.write        = ll_write;
   ll_oper.create      = ll_create;
   ll_oper.release     = ll_release;
   ll_oper.unlink      = ll_unlink;
   ll_oper.forget      = ll_forget;
 
-  Gassy *fs = new Gassy;
+  BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
+  Gassy *fs = new Gassy(ba);
 
 	if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
 	    (ch = fuse_mount(mountpoint, &args)) != NULL) {
@@ -551,7 +700,7 @@ int main(int argc, char *argv[])
 		if (se != NULL) {
 			if (fuse_set_signal_handlers(se) != -1) {
 				fuse_session_add_chan(se, ch);
-				err = fuse_session_loop(se);
+				err = fuse_session_loop_mt(se);
 				fuse_remove_signal_handlers(se);
 				fuse_session_remove_chan(ch);
 			}
