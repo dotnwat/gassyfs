@@ -276,11 +276,7 @@ class Gassy {
   int GetAttr(fuse_ino_t ino, struct stat *st) {
     MutexLock l(&mutex_);
 
-    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
-    if (it == ino_to_inode_.end())
-      return -ENOENT;
-
-    Inode *in = it->second;
+    Inode *in = inode_get(ino);
     *st = in->i_st;
 
     return 0;
@@ -325,11 +321,7 @@ class Gassy {
   int Open(fuse_ino_t ino) {
     MutexLock l(&mutex_);
 
-    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
-    if (it == ino_to_inode_.end())
-      return -ENOENT;
-
-    Inode *in = it->second;
+    Inode *in = inode_get(ino);
     in->get();
 
     return 0;
@@ -372,11 +364,7 @@ class Gassy {
       size_t size, const char *buf) {
     MutexLock l(&mutex_);
 
-    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
-    if (it == ino_to_inode_.end())
-      return -ENOENT;
-
-    Inode *in = it->second;
+    Inode *in = inode_get(ino);
 
     int ret = in->set_capacity(offset + size, ba_);
     if (ret)
@@ -415,11 +403,7 @@ class Gassy {
       size_t size, char *buf) {
     MutexLock l(&mutex_);
 
-    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
-    if (it == ino_to_inode_.end())
-      return -ENOENT;
-
-    Inode *in = it->second;
+    Inode *in = inode_get(ino);
 
     // don't read past eof
     size_t left;
@@ -449,6 +433,16 @@ class Gassy {
     fh->skip(new_n);
 
     return new_n;
+  }
+
+  /*
+   *
+   */
+  Inode *inode_get(fuse_ino_t ino) {
+    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    if (it == ino_to_inode_.end())
+      return NULL;
+    return it->second;
   }
 
  private:
