@@ -210,22 +210,13 @@ class Inode {
 /*
  *
  */
-class FileHandle {
- public:
-  FileHandle() :
-    pos_(0)
+struct FileHandle {
+  Inode *in;
+  off_t pos;
+
+  FileHandle(Inode *in) :
+    in(in), pos(0)
   {}
-
-  off_t pos() const {
-    return pos_;
-  }
-
-  void skip(off_t s) {
-    pos_ += s;
-  }
-
- private:
-  off_t pos_;
 };
 
 /*
@@ -247,7 +238,8 @@ class Gassy {
   /*
    *
    */
-  int Create(const std::string& name, mode_t mode, int flags, struct stat *st) {
+  int Create(const std::string& name, mode_t mode, int flags,
+      struct stat *st, FileHandle **fhp) {
     MutexLock l(&mutex_);
 
     std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
@@ -266,6 +258,9 @@ class Gassy {
     in->i_st.st_blksize = 4096;
 
     *st = in->i_st;
+
+    FileHandle *fh = new FileHandle(in);
+    *fhp = fh;
 
     return 0;
   }
@@ -318,11 +313,14 @@ class Gassy {
   /*
    *
    */
-  int Open(fuse_ino_t ino) {
+  int Open(fuse_ino_t ino, FileHandle **fhp) {
     MutexLock l(&mutex_);
 
     Inode *in = inode_get(ino);
     in->get();
+
+    FileHandle *fh = new FileHandle(in);
+    *fhp = fh;
 
     return 0;
   }
@@ -360,11 +358,10 @@ class Gassy {
   /*
    *
    */
-  ssize_t Write(fuse_ino_t ino, FileHandle *fh, off_t offset,
-      size_t size, const char *buf) {
+  ssize_t Write(FileHandle *fh, off_t offset, size_t size, const char *buf) {
     MutexLock l(&mutex_);
 
-    Inode *in = inode_get(ino);
+    Inode *in = fh->in;
 
     int ret = in->set_capacity(offset + size, ba_);
     if (ret)
@@ -391,7 +388,7 @@ class Gassy {
 
     in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
 
-    fh->skip(size);
+    fh->pos += size;
 
     return size;
   }
@@ -399,11 +396,11 @@ class Gassy {
   /*
    *
    */
-  ssize_t Read(fuse_ino_t ino, FileHandle *fh, off_t offset,
+  ssize_t Read(FileHandle *fh, off_t offset,
       size_t size, char *buf) {
     MutexLock l(&mutex_);
 
-    Inode *in = inode_get(ino);
+    Inode *in = fh->in;
 
     // don't read past eof
     size_t left;
@@ -430,7 +427,7 @@ class Gassy {
       left -= done;
     }
 
-    fh->skip(new_n);
+    fh->pos += new_n;
 
     return new_n;
   }
@@ -473,14 +470,16 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 		mode_t mode, struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  FileHandle *fh;
+
   assert(parent == FUSE_ROOT_ID);
 
   struct fuse_entry_param fe;
   memset(&fe, 0, sizeof(fe));
 
-  int ret = fs->Create(name, mode, fi->flags, &fe.attr);
+  int ret = fs->Create(name, mode, fi->flags, &fe.attr, &fh);
   if (ret == 0) {
-    fi->fh = (long)new FileHandle;
+    fi->fh = (long)fh;
     fe.ino = fe.attr.st_ino;
     fe.generation = 1;
     fe.entry_timeout = 1.0;
@@ -605,12 +604,13 @@ static void ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  FileHandle *fh;
 
   assert(!(fi->flags & O_CREAT));
 
-  int ret = fs->Open(ino);
+  int ret = fs->Open(ino, &fh);
   if (ret == 0) {
-    fi->fh = (long)new FileHandle;
+    fi->fh = (long)fh;
     fuse_reply_open(req, fi);
   } else
 		fuse_reply_err(req, -ret);
@@ -622,7 +622,7 @@ static void ll_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   FileHandle *fh = (FileHandle*)fi->fh;
 
-  ssize_t ret = fs->Write(ino, fh, off, size, buf);
+  ssize_t ret = fs->Write(fh, off, size, buf);
   if (ret >= 0)
     fuse_reply_write(req, ret);
   else
@@ -638,7 +638,7 @@ static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
   char buf[1<<20];
   size_t new_size = std::min(size, sizeof(buf));
 
-  ssize_t ret = fs->Read(ino, fh, off, new_size, buf);
+  ssize_t ret = fs->Read(fh, off, new_size, buf);
   if (ret >= 0)
     fuse_reply_buf(req, buf, ret);
   else
