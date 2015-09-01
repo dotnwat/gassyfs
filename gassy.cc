@@ -14,9 +14,10 @@
 #include <string>
 #include <deque>
 #include <vector>
+#include <iostream>
 
-#include <fuse/fuse.h>
-#include <fuse/fuse_lowlevel.h>
+#include <fuse.h>
+#include <fuse_lowlevel.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -228,28 +229,28 @@ class Gassy {
     next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
   {
     // setup root inode
-    // TODO: path_to_inode for root?
     Inode *root = new Inode(FUSE_ROOT_ID);
     root->i_st.st_mode = S_IFDIR | 0755;
     root->i_st.st_nlink = 2;
     ino_to_inode_[root->ino()] = root;
+    children_[FUSE_ROOT_ID] = std::map<std::string, fuse_ino_t>();
   }
 
   /*
    *
    */
-  int Create(const std::string& name, mode_t mode, int flags,
-      struct stat *st, FileHandle **fhp) {
+  int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+      int flags, struct stat *st, FileHandle **fhp) {
     MutexLock l(&mutex_);
 
-    std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
-    if (it != path_to_inode_.end())
+    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    if (children.find(name) != children.end())
       return -EEXIST;
 
     Inode *in = new Inode(next_ino_++);
     in->get();
 
-    path_to_inode_[name] = in;
+    children[name] = in->ino();
     ino_to_inode_[in->ino()] = in;
 
     in->i_st.st_ino = in->ino();
@@ -280,14 +281,15 @@ class Gassy {
   /*
    *
    */
-  int Unlink(const std::string& name) {
+  int Unlink(fuse_ino_t parent_ino, const std::string& name) {
     MutexLock l(&mutex_);
 
-    std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
-    if (it == path_to_inode_.end())
+    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
+    if (it == children.end())
       return -ENOENT;
 
-    path_to_inode_.erase(name);
+    children.erase(it);
 
     return 0;
   }
@@ -295,14 +297,15 @@ class Gassy {
   /*
    *
    */
-  int Lookup(const std::string& name, struct stat *st) {
+  int Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat *st) {
     MutexLock l(&mutex_);
 
-    std::map<std::string, Inode*>::const_iterator it = path_to_inode_.find(name);
-    if (it == path_to_inode_.end())
+    const std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
+    if (it == children.end())
       return -ENOENT;
 
-    Inode *in = it->second;
+    Inode *in = inode_get(it->second);
     in->get();
 
     *st = in->i_st;
@@ -344,15 +347,16 @@ class Gassy {
   /*
    *
    */
-  void PathNames(std::vector<std::string>& names) {
+  void PathNames(fuse_ino_t ino, std::vector<std::string>& names) {
     MutexLock l(&mutex_);
 
-    std::vector<std::string> v;
-    for (std::map<std::string, Inode*>::const_iterator it = path_to_inode_.begin();
-        it != path_to_inode_.end(); it++) {
-      v.push_back(it->first);
+    const std::map<std::string, fuse_ino_t>& children = children_.at(ino);
+
+    std::vector<std::string> out;
+    for (auto &it : children) {
+      out.push_back(it.first);
     }
-    names.swap(v);
+    names.swap(out);
   }
 
   /*
@@ -435,6 +439,65 @@ class Gassy {
   /*
    *
    */
+  int Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+      struct stat *st, uid_t uid, gid_t gid) {
+    MutexLock l(&mutex_);
+
+    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    if (children.find(name) != children.end())
+      return -EEXIST;
+
+    Inode *in = new Inode(next_ino_++);
+    in->get();
+
+    in->i_st.st_uid = uid;
+    in->i_st.st_gid = gid;
+    in->i_st.st_ino = in->ino();
+    in->i_st.st_mode = S_IFDIR | 0755;
+    in->i_st.st_nlink = 2;
+    in->i_st.st_blksize = 4096;
+    in->i_st.st_blocks = 1;
+
+    *st = in->i_st;
+
+    children_[in->ino()] = std::map<std::string, fuse_ino_t>();
+    children[name] = in->ino();
+    ino_to_inode_[in->ino()] = in;
+
+    return 0;
+  }
+
+  /*
+   *
+   */
+  int Rmdir(fuse_ino_t parent_ino, const std::string& name) {
+    MutexLock l(&mutex_);
+
+    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
+    if (it == children.end())
+      return -ENOENT;
+
+    Inode *in = inode_get(it->second);
+    if (!(in->i_st.st_mode & S_IFDIR))
+      return -ENOTDIR;
+
+    std::map<fuse_ino_t, std::map<std::string, fuse_ino_t>>::iterator it2 =
+      children_.find(it->second);
+    assert(it2 != children_.end());
+
+    if (it2->second.size())
+      return -ENOTEMPTY;
+
+    children.erase(it);
+    children_.erase(it2);
+
+    return 0;
+  }
+
+  /*
+   *
+   */
   Inode *inode_get(fuse_ino_t ino) {
     std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
     if (it == ino_to_inode_.end())
@@ -458,7 +521,7 @@ class Gassy {
 
   fuse_ino_t next_ino_;
   Mutex mutex_;
-  std::map<std::string, Inode*> path_to_inode_;
+  std::map<fuse_ino_t, std::map<std::string, fuse_ino_t>> children_;
   std::map<fuse_ino_t, Inode*> ino_to_inode_;
   BlockAllocator *ba_;
 };
@@ -477,11 +540,11 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
   struct fuse_entry_param fe;
   memset(&fe, 0, sizeof(fe));
 
-  int ret = fs->Create(name, mode, fi->flags, &fe.attr, &fh);
+  int ret = fs->Create(parent, name, mode, fi->flags, &fe.attr, &fh);
   if (ret == 0) {
     fi->fh = (long)fh;
     fe.ino = fe.attr.st_ino;
-    fe.generation = 1;
+    fe.generation = 0;
     fe.entry_timeout = 1.0;
     fuse_reply_create(req, &fe, fi);
   } else
@@ -502,7 +565,7 @@ static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  int ret = fs->Unlink(name);
+  int ret = fs->Unlink(parent, name);
   fuse_reply_err(req, -ret);
 }
 
@@ -534,10 +597,10 @@ static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
   struct fuse_entry_param fe;
   memset(&fe, 0, sizeof(fe));
 
-  int ret = fs->Lookup(name, &fe.attr);
+  int ret = fs->Lookup(parent, name, &fe.attr);
   if (ret == 0) {
     fe.ino = fe.attr.st_ino;
-    fe.generation = 1;
+    fe.generation = 0;
     fuse_reply_entry(req, &fe);
   } else
     fuse_reply_err(req, -ret);
@@ -581,16 +644,13 @@ static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  assert(ino == FUSE_ROOT_ID);
-
   struct dirbuf b;
-
   memset(&b, 0, sizeof(b));
   dirbuf_add(req, &b, ".", 1);
   dirbuf_add(req, &b, "..", 1);
 
   std::vector<std::string> names;
-  fs->PathNames(names);
+  fs->PathNames(ino, names);
 
   for (std::vector<std::string>::const_iterator it = names.begin(); it != names.end(); it++) {
     dirbuf_add(req, &b, it->c_str(), strlen(it->c_str()));
@@ -645,6 +705,33 @@ static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     fuse_reply_err(req, -ret);
 }
 
+static void ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
+    mode_t mode)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  struct fuse_entry_param fe;
+  memset(&fe, 0, sizeof(fe));
+
+  int ret = fs->Mkdir(parent, name, mode, &fe.attr, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
+    fe.generation = 0;
+    fe.entry_timeout = 1.0;
+    fuse_reply_entry(req, &fe);
+  } else
+    fuse_reply_err(req, -ret);
+}
+
+static void ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  int ret = fs->Rmdir(parent, name);
+  fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -682,6 +769,8 @@ int main(int argc, char *argv[])
   ll_oper.release     = ll_release;
   ll_oper.unlink      = ll_unlink;
   ll_oper.forget      = ll_forget;
+  ll_oper.mkdir       = ll_mkdir;
+  ll_oper.rmdir       = ll_rmdir;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -722,9 +811,6 @@ int main(int argc, char *argv[])
 	void (*readlink) (fuse_req_t req, fuse_ino_t ino);
 	void (*mknod) (fuse_req_t req, fuse_ino_t parent, const char *name,
 		       mode_t mode, dev_t rdev);
-	void (*mkdir) (fuse_req_t req, fuse_ino_t parent, const char *name,
-		       mode_t mode);
-	void (*rmdir) (fuse_req_t req, fuse_ino_t parent, const char *name);
 	void (*symlink) (fuse_req_t req, const char *link, fuse_ino_t parent,
 			 const char *name);
 	void (*link) (fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
