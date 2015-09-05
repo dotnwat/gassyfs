@@ -15,6 +15,7 @@
 #include <deque>
 #include <vector>
 #include <iostream>
+#include <chrono>
 
 #include <fuse.h>
 #include <fuse_lowlevel.h>
@@ -232,6 +233,11 @@ class Gassy {
     Inode *root = new Inode(FUSE_ROOT_ID);
     root->i_st.st_mode = S_IFDIR | 0755;
     root->i_st.st_nlink = 2;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    root->i_st.st_atime = now;
+    root->i_st.st_mtime = now;
+    root->i_st.st_ctime = now;
+    root->i_st.st_birthtime = now;
     ino_to_inode_[root->ino()] = root;
     children_[FUSE_ROOT_ID] = std::map<std::string, fuse_ino_t>();
   }
@@ -240,9 +246,10 @@ class Gassy {
    *
    */
   int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
-      int flags, struct stat *st, FileHandle **fhp) {
+      int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid) {
     MutexLock l(&mutex_);
 
+    assert(children_.find(parent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
@@ -254,9 +261,16 @@ class Gassy {
     ino_to_inode_[in->ino()] = in;
 
     in->i_st.st_ino = in->ino();
-    in->i_st.st_mode = S_IFREG | 0666;
+    in->i_st.st_mode = S_IFREG | mode;
     in->i_st.st_nlink = 1;
     in->i_st.st_blksize = 4096;
+    in->i_st.st_uid = uid;
+    in->i_st.st_gid = gid;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
+    in->i_st.st_mtime = now;
+    in->i_st.st_ctime = now;
+    in->i_st.st_birthtime = now;
 
     *st = in->i_st;
 
@@ -284,11 +298,18 @@ class Gassy {
   int Unlink(fuse_ino_t parent_ino, const std::string& name) {
     MutexLock l(&mutex_);
 
+    assert(children_.find(parent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
     std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
     if (it == children.end())
       return -ENOENT;
 
+    Inode *in = inode_get(it->second);
+    assert(in);
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
+
+    symlinks_.erase(it->second);
     children.erase(it);
 
     return 0;
@@ -300,6 +321,7 @@ class Gassy {
   int Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat *st) {
     MutexLock l(&mutex_);
 
+    assert(children_.find(parent_ino) != children_.end());
     const std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
     std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
     if (it == children.end())
@@ -350,6 +372,7 @@ class Gassy {
   void PathNames(fuse_ino_t ino, std::vector<std::string>& names) {
     MutexLock l(&mutex_);
 
+    assert(children_.find(ino) != children_.end());
     const std::map<std::string, fuse_ino_t>& children = children_.at(ino);
 
     std::vector<std::string> out;
@@ -370,6 +393,10 @@ class Gassy {
     int ret = in->set_capacity(offset + size, ba_);
     if (ret)
       return ret;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
+    in->i_st.st_mtime = now;
 
     const off_t orig_offset = offset;
     const char *src = buf;
@@ -405,6 +432,9 @@ class Gassy {
     MutexLock l(&mutex_);
 
     Inode *in = fh->in;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
 
     // don't read past eof
     size_t left;
@@ -443,6 +473,7 @@ class Gassy {
       struct stat *st, uid_t uid, gid_t gid) {
     MutexLock l(&mutex_);
 
+    assert(children_.find(parent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
@@ -453,10 +484,15 @@ class Gassy {
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
     in->i_st.st_ino = in->ino();
-    in->i_st.st_mode = S_IFDIR | 0755;
+    in->i_st.st_mode = S_IFDIR | mode;
     in->i_st.st_nlink = 2;
     in->i_st.st_blksize = 4096;
     in->i_st.st_blocks = 1;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
+    in->i_st.st_mtime = now;
+    in->i_st.st_ctime = now;
+    in->i_st.st_birthtime = now;
 
     *st = in->i_st;
 
@@ -473,6 +509,7 @@ class Gassy {
   int Rmdir(fuse_ino_t parent_ino, const std::string& name) {
     MutexLock l(&mutex_);
 
+    assert(children_.find(parent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
     std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
     if (it == children.end())
@@ -504,11 +541,13 @@ class Gassy {
   {
     MutexLock l(&mutex_);
 
+    assert(children_.find(parent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& parent_children = children_.at(parent_ino);
     std::map<std::string, fuse_ino_t>::const_iterator parent_it = parent_children.find(name);
     if (parent_it == parent_children.end())
       return -ENOENT;
 
+    assert(children_.find(newparent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& newparent_children = children_.at(newparent_ino);
     std::map<std::string, fuse_ino_t>::const_iterator newparent_it = newparent_children.find(newname);
     if (newparent_it != newparent_children.end())
@@ -517,6 +556,9 @@ class Gassy {
     Inode *in = inode_get(parent_it->second);
     parent_children.erase(parent_it);
     newparent_children[newname] = in->ino();
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
 
     return 0;
   }
@@ -552,6 +594,60 @@ class Gassy {
     return 0;
   }
 
+  int Symlink(const std::string& link, fuse_ino_t parent_ino,
+      const std::string& name, struct stat *st, uid_t uid, gid_t gid)
+  {
+    MutexLock l(&mutex_);
+
+    assert(children_.find(parent_ino) != children_.end());
+    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    if (children.find(name) != children.end())
+      return -EEXIST;
+
+    Inode *in = new Inode(next_ino_++);
+    in->get();
+
+    children[name] = in->ino();
+    ino_to_inode_[in->ino()] = in;
+    symlinks_[in->ino()] = link;
+
+    in->i_st.st_ino = in->ino();
+    in->i_st.st_mode = S_IFLNK;
+    in->i_st.st_nlink = 1;
+    in->i_st.st_blksize = 4096;
+    in->i_st.st_uid = uid;
+    in->i_st.st_gid = gid;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
+    in->i_st.st_mtime = now;
+    in->i_st.st_ctime = now;
+    in->i_st.st_birthtime = now;
+
+    *st = in->i_st;
+
+    return 0;
+  }
+
+  int Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
+  {
+    MutexLock l(&mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+    assert(in->i_st.st_mode & S_IFLNK);
+
+    assert(symlinks_.find(ino) != symlinks_.end());
+    const std::string& link = symlinks_.at(ino);
+    int link_len = link.size();
+
+    if (link_len > maxlen)
+      return -ENAMETOOLONG;
+
+    std::strncpy(path, link.c_str(), maxlen);
+
+    return link_len;
+  }
+
   /*
    *
    */
@@ -580,6 +676,7 @@ class Gassy {
   Mutex mutex_;
   std::map<fuse_ino_t, std::map<std::string, fuse_ino_t>> children_;
   std::map<fuse_ino_t, Inode*> ino_to_inode_;
+  std::map<fuse_ino_t, std::string> symlinks_;
   BlockAllocator *ba_;
 };
 
@@ -590,12 +687,13 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
 		mode_t mode, struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
   FileHandle *fh;
 
   struct fuse_entry_param fe;
   memset(&fe, 0, sizeof(fe));
 
-  int ret = fs->Create(parent, name, mode, fi->flags, &fe.attr, &fh);
+  int ret = fs->Create(parent, name, mode, fi->flags, &fe.attr, &fh, ctx->uid, ctx->gid);
   if (ret == 0) {
     fi->fh = (long)fh;
     fe.ino = fe.attr.st_ino;
@@ -809,6 +907,49 @@ static void ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
     fuse_reply_err(req, -ret);
 }
 
+static void ll_readlink(fuse_req_t req, fuse_ino_t ino)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+  char path[PATH_MAX + 1];
+
+  int ret = fs->Readlink(ino, path, sizeof(path) - 1, ctx->uid, ctx->gid);
+  if (ret >= 0) {
+    path[ret] = '\0';
+    fuse_reply_readlink(req, path);
+  } else
+    fuse_reply_err(req, -ret);
+}
+
+static void ll_symlink(fuse_req_t req, const char *link, fuse_ino_t parent,
+			 const char *name)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  struct fuse_entry_param fe;
+  memset(&fe, 0, sizeof(fe));
+
+  int ret = fs->Symlink(link, parent, name, &fe.attr, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
+    fuse_reply_entry(req, &fe);
+  } else
+    fuse_reply_err(req, -ret);
+}
+
+static void ll_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
+		       struct fuse_file_info *fi)
+{
+  fuse_reply_err(req, 0);
+}
+
+static void ll_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
+			  struct fuse_file_info *fi)
+{
+  fuse_reply_err(req, 0);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -850,6 +991,10 @@ int main(int argc, char *argv[])
   ll_oper.rmdir       = ll_rmdir;
   ll_oper.rename      = ll_rename;
   ll_oper.setattr     = ll_setattr;
+  ll_oper.symlink     = ll_symlink;
+  ll_oper.readlink    = ll_readlink;
+  ll_oper.fsync       = ll_fsync;
+  ll_oper.fsyncdir    = ll_fsyncdir;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -885,11 +1030,8 @@ int main(int argc, char *argv[])
   // not a huge priority
 	void (*init) (void *userdata, struct fuse_conn_info *conn);
 	void (*destroy) (void *userdata);
-	void (*readlink) (fuse_req_t req, fuse_ino_t ino);
 	void (*mknod) (fuse_req_t req, fuse_ino_t parent, const char *name,
 		       mode_t mode, dev_t rdev);
-	void (*symlink) (fuse_req_t req, const char *link, fuse_ino_t parent,
-			 const char *name);
 	void (*link) (fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
 		      const char *newname);
 	void (*opendir) (fuse_req_t req, fuse_ino_t ino,
@@ -915,10 +1057,6 @@ int main(int argc, char *argv[])
 		       struct fuse_file_info *fi, int op);
 
   // easy and priority
-	void (*fsync) (fuse_req_t req, fuse_ino_t ino, int datasync,
-		       struct fuse_file_info *fi);
-	void (*fsyncdir) (fuse_req_t req, fuse_ino_t ino, int datasync,
-			  struct fuse_file_info *fi);
 	void (*statfs) (fuse_req_t req, fuse_ino_t ino);
 	void (*access) (fuse_req_t req, fuse_ino_t ino, int mask);
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
