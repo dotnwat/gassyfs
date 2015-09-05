@@ -677,6 +677,20 @@ class Gassy {
     return link_len;
   }
 
+  int Statfs(fuse_ino_t ino, struct statvfs *stbuf) {
+    MutexLock l(&mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    stbuf->f_fsid = 98238;
+    stbuf->f_namemax = PATH_MAX;
+    stbuf->f_frsize = 4096;
+    stbuf->f_bsize = 4096;
+
+    return 0;
+  }
+
   /*
    *
    */
@@ -979,6 +993,20 @@ static void ll_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
   fuse_reply_err(req, 0);
 }
 
+static void ll_statfs(fuse_req_t req, fuse_ino_t ino)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  struct statvfs stbuf;
+  memset(&stbuf, 0, sizeof(stbuf));
+
+  int ret = fs->Statfs(ino, &stbuf);
+  if (ret == 0)
+    fuse_reply_statfs(req, &stbuf);
+  else
+    fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1024,6 +1052,7 @@ int main(int argc, char *argv[])
   ll_oper.readlink    = ll_readlink;
   ll_oper.fsync       = ll_fsync;
   ll_oper.fsyncdir    = ll_fsyncdir;
+  ll_oper.statfs      = ll_statfs;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1086,7 +1115,6 @@ int main(int argc, char *argv[])
 		       struct fuse_file_info *fi, int op);
 
   // easy and priority
-	void (*statfs) (fuse_req_t req, fuse_ino_t ino);
 	void (*access) (fuse_req_t req, fuse_ino_t ino, int mask);
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
 		       off_t offset, off_t length, struct fuse_file_info *fi);
