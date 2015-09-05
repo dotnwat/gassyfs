@@ -1021,6 +1021,10 @@ int main(int argc, char *argv[])
     return 0;
   }
 
+  fprintf(stdout, "GASNet(%d): segment size = %lu\n",
+      gasnet_mynode(), segsz);
+  fflush(stdout);
+
   assert(gasnet_mynode() == 0);
 
   gasnet_seginfo_t segments[gasnet_nodes()];
