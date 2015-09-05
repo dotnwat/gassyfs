@@ -5,7 +5,7 @@ endif
 
 CXX=g++
 
-CXXFLAGS += -Wall
+CXXFLAGS += -Wall -std=c++11 -Wno-deprecated-register
 CPPFLAGS += -DGASNET_PAR=1
 CPPFLAGS += -I$(GASNET)/include
 LDFLAGS += -L$(GASNET)/lib
@@ -18,7 +18,11 @@ endif
 
 CPPFLAGS += $(shell pkg-config fuse --cflags)
 LIBS += $(shell pkg-config fuse --libs)
-LIBS += -lrt -lm
+LIBS += -lm
+
+ifneq ($(shell uname -s),Darwin)
+	LD_FLAGS	+= -lrt
+endif
 
 gassy: gassy.cc
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
