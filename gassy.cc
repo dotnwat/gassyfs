@@ -496,6 +496,32 @@ class Gassy {
   }
 
   /*
+   * FIXME:
+   *   - There are a lot of different cases that aren't currently handled.
+   */
+  int Rename(fuse_ino_t parent_ino, const std::string& name,
+      fuse_ino_t newparent_ino, const std::string& newname)
+  {
+    MutexLock l(&mutex_);
+
+    std::map<std::string, fuse_ino_t>& parent_children = children_.at(parent_ino);
+    std::map<std::string, fuse_ino_t>::const_iterator parent_it = parent_children.find(name);
+    if (parent_it == parent_children.end())
+      return -ENOENT;
+
+    std::map<std::string, fuse_ino_t>& newparent_children = children_.at(newparent_ino);
+    std::map<std::string, fuse_ino_t>::const_iterator newparent_it = newparent_children.find(newname);
+    if (newparent_it != newparent_children.end())
+      return -ENOTDIR;
+
+    Inode *in = inode_get(parent_it->second);
+    parent_children.erase(parent_it);
+    newparent_children[newname] = in->ino();
+
+    return 0;
+  }
+
+  /*
    *
    */
   Inode *inode_get(fuse_ino_t ino) {
@@ -732,6 +758,15 @@ static void ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
   fuse_reply_err(req, -ret);
 }
 
+static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
+			fuse_ino_t newparent, const char *newname)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  int ret = fs->Rename(parent, name, newparent, newname);
+  fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -771,6 +806,7 @@ int main(int argc, char *argv[])
   ll_oper.forget      = ll_forget;
   ll_oper.mkdir       = ll_mkdir;
   ll_oper.rmdir       = ll_rmdir;
+  ll_oper.rename      = ll_rename;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -838,8 +874,6 @@ int main(int argc, char *argv[])
 		       struct fuse_file_info *fi, int op);
 
   // easy and priority
-	void (*rename) (fuse_req_t req, fuse_ino_t parent, const char *name,
-			fuse_ino_t newparent, const char *newname);
 	void (*fsync) (fuse_req_t req, fuse_ino_t ino, int datasync,
 		       struct fuse_file_info *fi);
 	void (*fsyncdir) (fuse_req_t req, fuse_ino_t ino, int datasync,
