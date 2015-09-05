@@ -521,6 +521,37 @@ class Gassy {
     return 0;
   }
 
+  int SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
+      uid_t uid, gid_t gid)
+  {
+    MutexLock l(&mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    if (to_set & FUSE_SET_ATTR_MODE)
+      in->i_st.st_mode = attr->st_mode;
+
+    if (to_set & FUSE_SET_ATTR_UID)
+      in->i_st.st_uid = attr->st_uid;
+
+    if (to_set & FUSE_SET_ATTR_GID)
+      in->i_st.st_gid = attr->st_gid;
+
+    if (to_set & FUSE_SET_ATTR_MTIME)
+      in->i_st.st_mtime = attr->st_mtime;
+
+    if (to_set & FUSE_SET_ATTR_ATIME)
+      in->i_st.st_atime = attr->st_atime;
+
+    if (to_set & FUSE_SET_ATTR_SIZE)
+      in->i_st.st_size = attr->st_size;
+
+    *attr = in->i_st;
+
+    return 0;
+  }
+
   /*
    *
    */
@@ -765,6 +796,19 @@ static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
   fuse_reply_err(req, -ret);
 }
 
+static void ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
+			 int to_set, struct fuse_file_info *fi)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  int ret = fs->SetAttr(ino, attr, to_set, ctx->uid, ctx->gid);
+  if (ret == 0)
+    fuse_reply_attr(req, attr, 0);
+  else
+    fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -805,6 +849,7 @@ int main(int argc, char *argv[])
   ll_oper.mkdir       = ll_mkdir;
   ll_oper.rmdir       = ll_rmdir;
   ll_oper.rename      = ll_rename;
+  ll_oper.setattr     = ll_setattr;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -840,8 +885,6 @@ int main(int argc, char *argv[])
   // not a huge priority
 	void (*init) (void *userdata, struct fuse_conn_info *conn);
 	void (*destroy) (void *userdata);
-	void (*setattr) (fuse_req_t req, fuse_ino_t ino, struct stat *attr,
-			 int to_set, struct fuse_file_info *fi);
 	void (*readlink) (fuse_req_t req, fuse_ino_t ino);
 	void (*mknod) (fuse_req_t req, fuse_ino_t parent, const char *name,
 		       mode_t mode, dev_t rdev);
