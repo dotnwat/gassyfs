@@ -10,7 +10,7 @@
 
 #define FUSE_USE_VERSION 30
 
-#include <map>
+#include <unordered_map>
 #include <string>
 #include <deque>
 #include <vector>
@@ -239,7 +239,7 @@ class Gassy {
     root->i_st.st_ctime = now;
     root->i_st.st_birthtime = now;
     ino_to_inode_[root->ino()] = root;
-    children_[FUSE_ROOT_ID] = std::map<std::string, fuse_ino_t>();
+    children_[FUSE_ROOT_ID] = dir_t();
   }
 
   /*
@@ -250,7 +250,7 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -299,8 +299,8 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
+    dir_t& children = children_.at(parent_ino);
+    dir_t::const_iterator it = children.find(name);
     if (it == children.end())
       return -ENOENT;
 
@@ -322,8 +322,8 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
-    const std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
+    const dir_t& children = children_.at(parent_ino);
+    dir_t::const_iterator it = children.find(name);
     if (it == children.end())
       return -ENOENT;
 
@@ -373,7 +373,7 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(ino) != children_.end());
-    const std::map<std::string, fuse_ino_t>& children = children_.at(ino);
+    const dir_t& children = children_.at(ino);
 
     std::vector<std::string> out;
     for (auto &it : children) {
@@ -474,7 +474,7 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -496,7 +496,7 @@ class Gassy {
 
     *st = in->i_st;
 
-    children_[in->ino()] = std::map<std::string, fuse_ino_t>();
+    children_[in->ino()] = dir_t();
     children[name] = in->ino();
     ino_to_inode_[in->ino()] = in;
 
@@ -510,8 +510,8 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator it = children.find(name);
+    dir_t& children = children_.at(parent_ino);
+    dir_t::const_iterator it = children.find(name);
     if (it == children.end())
       return -ENOENT;
 
@@ -519,7 +519,7 @@ class Gassy {
     if (!(in->i_st.st_mode & S_IFDIR))
       return -ENOTDIR;
 
-    std::map<fuse_ino_t, std::map<std::string, fuse_ino_t>>::iterator it2 =
+    dir_table_t::iterator it2 =
       children_.find(it->second);
     assert(it2 != children_.end());
 
@@ -544,8 +544,8 @@ class Gassy {
 
     // old
     assert(children_.find(parent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& parent_children = children_.at(parent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator old_it = parent_children.find(name);
+    dir_t& parent_children = children_.at(parent_ino);
+    dir_t::const_iterator old_it = parent_children.find(name);
     if (old_it == parent_children.end())
       return -ENOENT;
 
@@ -554,8 +554,8 @@ class Gassy {
 
     // new
     assert(children_.find(newparent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& newparent_children = children_.at(newparent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator new_it = newparent_children.find(newname);
+    dir_t& newparent_children = children_.at(newparent_ino);
+    dir_t::const_iterator new_it = newparent_children.find(newname);
 
     Inode *new_in = NULL;
     if (new_it != newparent_children.end()) {
@@ -566,7 +566,7 @@ class Gassy {
     if (new_in) {
       if (old_in->i_st.st_mode & S_IFDIR) {
         if (new_in->i_st.st_mode & S_IFDIR) {
-          std::map<std::string, fuse_ino_t>& new_children = children_.at(new_it->second);
+          dir_t& new_children = children_.at(new_it->second);
           if (new_children.size())
             return -ENOTEMPTY;
         } else
@@ -629,7 +629,7 @@ class Gassy {
     MutexLock l(&mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
-    std::map<std::string, fuse_ino_t>& children = children_.at(parent_ino);
+    dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -694,19 +694,25 @@ class Gassy {
   /*
    *
    */
-  Inode *inode_get(fuse_ino_t ino) {
-    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+  Inode *inode_get(fuse_ino_t ino) const {
+    inode_table_t::const_iterator it = ino_to_inode_.find(ino);
     if (it == ino_to_inode_.end())
       return NULL;
     return it->second;
   }
 
  private:
+  typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
+  typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
+  typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
+  typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
+
+
   /*
    *
    */
   void put_inode(fuse_ino_t ino, long unsigned dec = 1) {
-    std::map<fuse_ino_t, Inode*>::const_iterator it = ino_to_inode_.find(ino);
+    inode_table_t::iterator it = ino_to_inode_.find(ino);
     assert(it != ino_to_inode_.end());
     Inode *in = it->second;
     if (!in->put(dec)) {
@@ -717,9 +723,9 @@ class Gassy {
 
   fuse_ino_t next_ino_;
   Mutex mutex_;
-  std::map<fuse_ino_t, std::map<std::string, fuse_ino_t>> children_;
-  std::map<fuse_ino_t, Inode*> ino_to_inode_;
-  std::map<fuse_ino_t, std::string> symlinks_;
+  dir_table_t children_;
+  inode_table_t ino_to_inode_;
+  symlink_table_t symlinks_;
   BlockAllocator *ba_;
 };
 
