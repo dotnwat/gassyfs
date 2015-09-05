@@ -691,6 +691,12 @@ class Gassy {
     return 0;
   }
 
+ private:
+  typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
+  typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
+  typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
+  typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
+
   /*
    *
    */
@@ -700,13 +706,6 @@ class Gassy {
       return NULL;
     return it->second;
   }
-
- private:
-  typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-  typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
-  typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
-  typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
-
 
   /*
    *
