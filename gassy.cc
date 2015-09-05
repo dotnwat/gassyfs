@@ -529,36 +529,65 @@ class Gassy {
     children.erase(it);
     children_.erase(it2);
 
+    // TODO: need unlink here?
+
     return 0;
   }
 
   /*
-   * FIXME:
-   *   - There are a lot of different cases that aren't currently handled.
+   *
    */
   int Rename(fuse_ino_t parent_ino, const std::string& name,
       fuse_ino_t newparent_ino, const std::string& newname)
   {
     MutexLock l(&mutex_);
 
+    // old
     assert(children_.find(parent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& parent_children = children_.at(parent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator parent_it = parent_children.find(name);
-    if (parent_it == parent_children.end())
+    std::map<std::string, fuse_ino_t>::const_iterator old_it = parent_children.find(name);
+    if (old_it == parent_children.end())
       return -ENOENT;
 
+    Inode *old_in = inode_get(old_it->second);
+    assert(old_in);
+
+    // new
     assert(children_.find(newparent_ino) != children_.end());
     std::map<std::string, fuse_ino_t>& newparent_children = children_.at(newparent_ino);
-    std::map<std::string, fuse_ino_t>::const_iterator newparent_it = newparent_children.find(newname);
-    if (newparent_it != newparent_children.end())
-      return -ENOTDIR;
+    std::map<std::string, fuse_ino_t>::const_iterator new_it = newparent_children.find(newname);
 
-    Inode *in = inode_get(parent_it->second);
-    parent_children.erase(parent_it);
-    newparent_children[newname] = in->ino();
+    Inode *new_in = NULL;
+    if (new_it != newparent_children.end()) {
+      new_in = inode_get(new_it->second);
+      assert(new_in);
+    }
+
+    if (new_in) {
+      if (old_in->i_st.st_mode & S_IFDIR) {
+        if (new_in->i_st.st_mode & S_IFDIR) {
+          std::map<std::string, fuse_ino_t>& new_children = children_.at(new_it->second);
+          if (new_children.size())
+            return -ENOTEMPTY;
+        } else
+          return -ENOTDIR;
+      } else {
+        if (new_in->i_st.st_mode & S_IFDIR)
+          return -EISDIR;
+      }
+
+      symlinks_.erase(new_it->second);
+      children_.erase(new_it->second);
+      newparent_children.erase(new_it);
+
+      // TODO: need unlink here?
+    }
 
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    in->i_st.st_ctime = now;
+    old_in->i_st.st_ctime = now;
+
+    newparent_children[newname] = old_it->second;
+    parent_children.erase(old_it);
 
     return 0;
   }
