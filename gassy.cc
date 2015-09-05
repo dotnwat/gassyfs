@@ -561,8 +561,6 @@ static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   FileHandle *fh;
 
-  assert(parent == FUSE_ROOT_ID);
-
   struct fuse_entry_param fe;
   memset(&fe, 0, sizeof(fe));
 
