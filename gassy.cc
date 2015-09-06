@@ -473,7 +473,6 @@ class Gassy {
       return -EEXIST;
 
     Inode *in = new Inode(next_ino_++);
-    in->get();
 
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
@@ -628,7 +627,6 @@ class Gassy {
       return -EEXIST;
 
     Inode *in = new Inode(next_ino_++);
-    in->get();
 
     children[name] = in->ino();
     ino_to_inode_[in->ino()] = in;
