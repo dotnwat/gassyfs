@@ -243,6 +243,9 @@ class Gassy {
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid) {
     MutexLock l(&mutex_);
 
+    if (name.length() >= PATH_MAX)
+      return -ENAMETOOLONG;
+
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
@@ -469,6 +472,9 @@ class Gassy {
       struct stat *st, uid_t uid, gid_t gid) {
     MutexLock l(&mutex_);
 
+    if (name.length() >= PATH_MAX)
+      return -ENAMETOOLONG;
+
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
@@ -651,6 +657,10 @@ class Gassy {
   {
     MutexLock l(&mutex_);
 
+    // TODO: check length of link path components
+    if (name.length() >= PATH_MAX)
+      return -ENAMETOOLONG;
+
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
@@ -717,6 +727,11 @@ class Gassy {
       dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
   {
     MutexLock l(&mutex_);
+
+    assert(0);
+
+    if (name.length() >= PATH_MAX)
+      return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
