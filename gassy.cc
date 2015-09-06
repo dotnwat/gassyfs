@@ -73,7 +73,7 @@ class MutexLock {
  * blocks are allocated from a free list, otherwise new blocks are assigned in
  * round-robin across all GASNet segments.
  */
-#define BLOCK_SIZE 1048576
+#define BLOCK_SIZE 4096
 class BlockAllocator {
  public:
   struct Block {
@@ -180,6 +180,11 @@ class Inode {
       blks_.push_back(b);
     }
     return 0;
+  }
+
+  void free_blocks(BlockAllocator *ba) {
+    for (auto &blk : blks_)
+      ba->ReturnBlock(blk);
   }
 
   fuse_ino_t ino() const {
@@ -705,6 +710,7 @@ class Gassy {
     Inode *in = it->second;
     if (!in->put(dec)) {
       ino_to_inode_.erase(ino);
+      in->free_blocks(ba_);
       delete in;
     }
   }
