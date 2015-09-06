@@ -322,6 +322,7 @@ class Gassy {
       return -ENOENT;
 
     Inode *in = inode_get(it->second);
+    assert(in);
     in->get();
 
     *st = in->i_st;
@@ -336,6 +337,7 @@ class Gassy {
     MutexLock l(&mutex_);
 
     Inode *in = inode_get(ino);
+    assert(in);
     in->get();
 
     FileHandle *fh = new FileHandle(in);
@@ -683,6 +685,40 @@ class Gassy {
     return 0;
   }
 
+  int Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+      dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
+  {
+    MutexLock l(&mutex_);
+
+    assert(children_.find(parent_ino) != children_.end());
+    dir_t& children = children_.at(parent_ino);
+    if (children.find(name) != children.end())
+      return -EEXIST;
+
+    Inode *in = new Inode(next_ino_++);
+
+    children[name] = in->ino();
+    ino_to_inode_[in->ino()] = in;
+
+    assert(mode & S_IFIFO);
+
+    in->i_st.st_ino = in->ino();
+    in->i_st.st_mode = mode;
+    in->i_st.st_nlink = 1;
+    in->i_st.st_blksize = 4096;
+    in->i_st.st_uid = uid;
+    in->i_st.st_gid = gid;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
+    in->i_st.st_mtime = now;
+    in->i_st.st_ctime = now;
+    in->i_st.st_birthtime = now;
+
+    *st = in->i_st;
+
+    return 0;
+  }
+
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
   typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
@@ -963,7 +999,7 @@ static void ll_readlink(fuse_req_t req, fuse_ino_t ino)
 }
 
 static void ll_symlink(fuse_req_t req, const char *link, fuse_ino_t parent,
-			 const char *name)
+    const char *name)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -980,13 +1016,13 @@ static void ll_symlink(fuse_req_t req, const char *link, fuse_ino_t parent,
 }
 
 static void ll_fsync(fuse_req_t req, fuse_ino_t ino, int datasync,
-		       struct fuse_file_info *fi)
+    struct fuse_file_info *fi)
 {
   fuse_reply_err(req, 0);
 }
 
 static void ll_fsyncdir(fuse_req_t req, fuse_ino_t ino, int datasync,
-			  struct fuse_file_info *fi)
+    struct fuse_file_info *fi)
 {
   fuse_reply_err(req, 0);
 }
@@ -1002,6 +1038,23 @@ static void ll_statfs(fuse_req_t req, fuse_ino_t ino)
   if (ret == 0)
     fuse_reply_statfs(req, &stbuf);
   else
+    fuse_reply_err(req, -ret);
+}
+
+static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
+    mode_t mode, dev_t rdev)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  struct fuse_entry_param fe;
+  memset(&fe, 0, sizeof(fe));
+
+  int ret = fs->Mknod(parent, name, mode, rdev, &fe.attr, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
+    fuse_reply_entry(req, &fe);
+  } else
     fuse_reply_err(req, -ret);
 }
 
@@ -1055,6 +1108,7 @@ int main(int argc, char *argv[])
   ll_oper.fsync       = ll_fsync;
   ll_oper.fsyncdir    = ll_fsyncdir;
   ll_oper.statfs      = ll_statfs;
+  ll_oper.mknod       = ll_mknod;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1090,8 +1144,6 @@ int main(int argc, char *argv[])
   // not a huge priority
 	void (*init) (void *userdata, struct fuse_conn_info *conn);
 	void (*destroy) (void *userdata);
-	void (*mknod) (fuse_req_t req, fuse_ino_t parent, const char *name,
-		       mode_t mode, dev_t rdev);
 	void (*link) (fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
 		      const char *newname);
 	void (*opendir) (fuse_req_t req, fuse_ino_t ino,
