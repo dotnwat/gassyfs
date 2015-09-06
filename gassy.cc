@@ -591,12 +591,22 @@ class Gassy {
       uid_t uid, gid_t gid)
   {
     MutexLock l(&mutex_);
+    mode_t clear_mode = 0;
 
     Inode *in = inode_get(ino);
     assert(in);
 
+    if (in->i_st.st_uid != uid)
+      return -EPERM;
+
+    if (in->i_st.st_gid != gid)
+      clear_mode |= S_ISGID;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(
+        std::chrono::system_clock::now());
+
     if (to_set & FUSE_SET_ATTR_MODE)
-      in->i_st.st_mode = attr->st_mode;
+      in->i_st.st_mode = (in->i_st.st_mode & ~07777) | (attr->st_mode & 07777);
 
     if (to_set & FUSE_SET_ATTR_UID)
       in->i_st.st_uid = attr->st_uid;
@@ -612,6 +622,24 @@ class Gassy {
 
     if (to_set & FUSE_SET_ATTR_SIZE)
       in->i_st.st_size = attr->st_size;
+
+    // how do these related to the non-NOW versions?
+    if (to_set & FUSE_SET_ATTR_MTIME_NOW)
+      in->i_st.st_mtime = now;
+    if (to_set & FUSE_SET_ATTR_ATIME_NOW)
+      in->i_st.st_atime = now;
+
+// FIXME: this isn't an option on Linux?
+#if 0
+    if (to_set & FUSE_SET_ATTR_CTIME)
+      ctime = attr->st_ctime;
+#endif
+
+    assert(!(to_set & FUSE_SET_ATTR_SIZE));
+
+    in->i_st.st_ctime = now;
+
+    in->i_st.st_mode &= ~clear_mode;
 
     *attr = in->i_st;
 
