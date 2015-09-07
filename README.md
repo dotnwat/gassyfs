@@ -10,7 +10,7 @@ accessed using [GASNet](http://gasnet.lbl.gov/), which supports
 variety of high-performance network interconnects, as well as supporting
 slower network access methods such as UDP that are useful for development. The
 Gassy file system is intended to be used in a manner analagous to
-[tmpfs](http://en.wikipedia.org/wiki/Tmpfs), when the amount of RAM needed
+[tmpfs](http://en.wikipedia.org/wiki/Tmpfs), but when the amount of RAM needed
 exceeds that of a single node.
 
 # Testing
