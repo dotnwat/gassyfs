@@ -34,3 +34,7 @@ make allyesconfig
 make -j20
 make distclean
 ```
+
+```bash
+iozone -a
+```
