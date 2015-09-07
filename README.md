@@ -23,3 +23,14 @@ cd rocksdb
 make -j5
 make check
 ```
+
+```bash
+git clone https://github.com/torvalds/linux.git
+cd linux
+make allmodconfig
+make -j20
+make distclean
+make allyesconfig
+make -j20
+make distclean
+```
