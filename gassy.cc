@@ -302,12 +302,15 @@ class Gassy {
       return -ENOENT;
 
     Inode *in = inode_get(it->second);
+    assert(!(in->i_st.st_mode & S_IFDIR));
     assert(in);
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     in->i_st.st_ctime = now;
 
     symlinks_.erase(it->second);
     children.erase(it);
+
+    put_inode(in->ino());
 
     return 0;
   }
@@ -318,13 +321,16 @@ class Gassy {
   int Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat *st) {
     MutexLock l(&mutex_);
 
-    assert(children_.find(parent_ino) != children_.end());
-    const dir_t& children = children_.at(parent_ino);
-    dir_t::const_iterator it = children.find(name);
-    if (it == children.end())
+    // FIXME: should this be -ENOTDIR?
+    dir_table_t::const_iterator it = children_.find(parent_ino);
+    if (it == children_.end())
       return -ENOENT;
 
-    Inode *in = inode_get(it->second);
+    dir_t::const_iterator it2 = it->second.find(name);
+    if (it2 == it->second.end())
+      return -ENOENT;
+
+    Inode *in = inode_get(it2->second);
     assert(in);
     in->get();
 
@@ -341,7 +347,6 @@ class Gassy {
 
     Inode *in = inode_get(ino);
     assert(in);
-    in->get();
 
     FileHandle *fh = new FileHandle(in);
     *fhp = fh;
@@ -352,10 +357,7 @@ class Gassy {
   /*
    *
    */
-  void Release(fuse_ino_t ino) {
-    MutexLock l(&mutex_);
-    put_inode(ino);
-  }
+  void Release(fuse_ino_t ino) {}
 
   /*
    *
@@ -481,6 +483,7 @@ class Gassy {
       return -EEXIST;
 
     Inode *in = new Inode(next_ino_++);
+    in->get();
 
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
@@ -530,7 +533,7 @@ class Gassy {
     children.erase(it);
     children_.erase(it2);
 
-    // TODO: need unlink here?
+    put_inode(in->ino());
 
     return 0;
   }
@@ -581,7 +584,7 @@ class Gassy {
       children_.erase(new_it->second);
       newparent_children.erase(new_it);
 
-      // TODO: need unlink here?
+      put_inode(new_in->ino());
     }
 
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -626,14 +629,19 @@ class Gassy {
     if (to_set & FUSE_SET_ATTR_ATIME)
       in->i_st.st_atime = attr->st_atime;
 
+    // FIXME: this is probably really wrong for truncate semantics, plus it
+    // would appear to not free up the extra space...
     if (to_set & FUSE_SET_ATTR_SIZE)
       in->i_st.st_size = attr->st_size;
 
+// FIXME: this isn't an option on Darwin?
+#if 0
     // how do these related to the non-NOW versions?
     if (to_set & FUSE_SET_ATTR_MTIME_NOW)
       in->i_st.st_mtime = now;
     if (to_set & FUSE_SET_ATTR_ATIME_NOW)
       in->i_st.st_atime = now;
+#endif
 
 // FIXME: this isn't an option on Linux?
 #if 0
@@ -641,7 +649,6 @@ class Gassy {
       ctime = attr->st_ctime;
 #endif
 
-    assert(!(to_set & FUSE_SET_ATTR_SIZE));
 
     in->i_st.st_ctime = now;
 
@@ -667,6 +674,7 @@ class Gassy {
       return -EEXIST;
 
     Inode *in = new Inode(next_ino_++);
+    in->get();
 
     children[name] = in->ino();
     ino_to_inode_[in->ino()] = in;
@@ -739,6 +747,7 @@ class Gassy {
       return -EEXIST;
 
     Inode *in = new Inode(next_ino_++);
+    in->get();
 
     children[name] = in->ino();
     ino_to_inode_[in->ino()] = in;
