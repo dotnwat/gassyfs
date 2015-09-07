@@ -16,6 +16,7 @@
 #include <vector>
 #include <iostream>
 #include <chrono>
+#include <mutex>
 
 #include <fuse.h>
 #include <fuse_lowlevel.h>
@@ -29,42 +30,6 @@
 #include <gasnet.h>
 
 #include "common.h"
-
-/*
- * Helpers
- */
-
-class Mutex {
- public:
-  Mutex() {
-    pthread_mutex_init(&mutex_, NULL);
-  }
-
-  void Lock() {
-    pthread_mutex_lock(&mutex_);
-  }
-
-  void Unlock() {
-    pthread_mutex_unlock(&mutex_);
-  }
-
- private:
-  pthread_mutex_t mutex_;
-};
-
-class MutexLock {
- public:
-  explicit MutexLock(Mutex *mutex) : mutex_(mutex) {
-    mutex_->Lock();
-  }
-
-  ~MutexLock() {
-    mutex_->Unlock();
-  }
-
- private:
-  Mutex *mutex_;
-};
 
 /*
  * Block Allocation
@@ -99,7 +64,7 @@ class BlockAllocator {
   }
 
   int GetBlock(Block *bp) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     if (!free_blks_.empty()) {
       Block b = free_blks_.front();
@@ -128,7 +93,7 @@ class BlockAllocator {
   }
 
   void ReturnBlock(Block b) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
     free_blks_.push_back(b);
   }
 
@@ -143,7 +108,7 @@ class BlockAllocator {
   unsigned curr_node, num_nodes;
   std::vector<Node> nodes_;
 
-  Mutex mutex_;
+  std::mutex mutex_;
 };
 
 /*
@@ -241,7 +206,7 @@ class Gassy {
    */
   int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     if (name.length() >= PATH_MAX)
       return -ENAMETOOLONG;
@@ -281,7 +246,7 @@ class Gassy {
    *
    */
   int GetAttr(fuse_ino_t ino, struct stat *st) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
     *st = in->i_st;
@@ -293,7 +258,7 @@ class Gassy {
    *
    */
   int Unlink(fuse_ino_t parent_ino, const std::string& name) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
@@ -319,7 +284,7 @@ class Gassy {
    *
    */
   int Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat *st) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     // FIXME: should this be -ENOTDIR?
     dir_table_t::const_iterator it = children_.find(parent_ino);
@@ -343,7 +308,7 @@ class Gassy {
    *
    */
   int Open(fuse_ino_t ino, FileHandle **fhp) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
     assert(in);
@@ -363,7 +328,7 @@ class Gassy {
    *
    */
   void Forget(fuse_ino_t ino, long unsigned nlookup) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
     put_inode(ino, nlookup);
   }
 
@@ -371,7 +336,7 @@ class Gassy {
    *
    */
   void PathNames(fuse_ino_t ino, std::vector<std::string>& names) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(ino) != children_.end());
     const dir_t& children = children_.at(ino);
@@ -387,7 +352,7 @@ class Gassy {
    *
    */
   ssize_t Write(FileHandle *fh, off_t offset, size_t size, const char *buf) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
 
@@ -430,7 +395,7 @@ class Gassy {
    */
   ssize_t Read(FileHandle *fh, off_t offset,
       size_t size, char *buf) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
 
@@ -472,7 +437,7 @@ class Gassy {
    */
   int Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       struct stat *st, uid_t uid, gid_t gid) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     if (name.length() >= PATH_MAX)
       return -ENAMETOOLONG;
@@ -511,7 +476,7 @@ class Gassy {
    *
    */
   int Rmdir(fuse_ino_t parent_ino, const std::string& name) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
@@ -544,7 +509,7 @@ class Gassy {
   int Rename(fuse_ino_t parent_ino, const std::string& name,
       fuse_ino_t newparent_ino, const std::string& newname)
   {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     // old
     assert(children_.find(parent_ino) != children_.end());
@@ -599,7 +564,7 @@ class Gassy {
   int SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
       uid_t uid, gid_t gid)
   {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
     mode_t clear_mode = 0;
 
     Inode *in = inode_get(ino);
@@ -662,7 +627,7 @@ class Gassy {
   int Symlink(const std::string& link, fuse_ino_t parent_ino,
       const std::string& name, struct stat *st, uid_t uid, gid_t gid)
   {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     // TODO: check length of link path components
     if (name.length() >= PATH_MAX)
@@ -699,7 +664,7 @@ class Gassy {
 
   int Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
   {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
     assert(in);
@@ -718,7 +683,7 @@ class Gassy {
   }
 
   int Statfs(fuse_ino_t ino, struct statvfs *stbuf) {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
     assert(in);
@@ -734,7 +699,7 @@ class Gassy {
   int Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
   {
-    MutexLock l(&mutex_);
+    std::lock_guard<std::mutex> l(mutex_);
 
     assert(0);
 
@@ -802,7 +767,7 @@ class Gassy {
   }
 
   fuse_ino_t next_ino_;
-  Mutex mutex_;
+  std::mutex mutex_;
   dir_table_t children_;
   inode_table_t ino_to_inode_;
   symlink_table_t symlinks_;
