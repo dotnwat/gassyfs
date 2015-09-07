@@ -3,7 +3,7 @@ ifndef GASNET
   $(error GASNET variable is not defined, aborting build)
 endif
 
-CXX=g++
+CXX=g++ -g
 
 CXXFLAGS += -Wall -std=c++11 -Wno-deprecated-register
 CPPFLAGS += -DGASNET_PAR=1

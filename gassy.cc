@@ -407,7 +407,11 @@ class Gassy {
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     in->i_st.st_atime = now;
 
-    // don't read past eof
+    // reading past eof returns nothing
+    if (offset >= in->i_st.st_size || size == 0)
+      return 0;
+
+    // read up until eof
     size_t left;
     if ((off_t)(offset + size) > in->i_st.st_size)
       left = in->i_st.st_size - offset;
