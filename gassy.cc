@@ -17,6 +17,7 @@
 #include <iostream>
 #include <chrono>
 #include <mutex>
+#include <cstring>
 
 #include <fuse.h>
 #include <fuse_lowlevel.h>
@@ -196,7 +197,9 @@ class Gassy {
     root->i_st.st_atime = now;
     root->i_st.st_mtime = now;
     root->i_st.st_ctime = now;
+#if 0
     root->i_st.st_birthtime = now;
+#endif
     ino_to_inode_[root->ino()] = root;
     children_[FUSE_ROOT_ID] = dir_t();
   }
@@ -232,7 +235,9 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
+#if 0
     in->i_st.st_birthtime = now;
+#endif
 
     *st = in->i_st;
 
@@ -404,7 +409,7 @@ class Gassy {
 
     // don't read past eof
     size_t left;
-    if ((offset + size) > in->i_st.st_size)
+    if ((off_t)(offset + size) > in->i_st.st_size)
       left = in->i_st.st_size - offset;
     else
       left = size;
@@ -461,7 +466,9 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
+#if 0
     in->i_st.st_birthtime = now;
+#endif
 
     *st = in->i_st;
 
@@ -655,7 +662,9 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
+#if 0
     in->i_st.st_birthtime = now;
+#endif
 
     *st = in->i_st;
 
@@ -672,14 +681,14 @@ class Gassy {
 
     assert(symlinks_.find(ino) != symlinks_.end());
     const std::string& link = symlinks_.at(ino);
-    int link_len = link.size();
+    size_t link_len = link.size();
 
     if (link_len > maxlen)
       return -ENAMETOOLONG;
 
     std::strncpy(path, link.c_str(), maxlen);
 
-    return link_len;
+    return (int)link_len;
   }
 
   int Statfs(fuse_ino_t ino, struct statvfs *stbuf) {
@@ -729,7 +738,9 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
+#if 0
     in->i_st.st_birthtime = now;
+#endif
 
     *st = in->i_st;
 
@@ -876,7 +887,7 @@ static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
 static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
 			     off_t off, size_t maxsize)
 {
-	if (off < bufsize)
+	if (off < (off_t)bufsize)
 		return fuse_reply_buf(req, buf + off,
 				      xmin(bufsize - off, maxsize));
 	else
