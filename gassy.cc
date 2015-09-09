@@ -151,13 +151,14 @@ class Inode {
   void free_blocks(BlockAllocator *ba) {
     for (auto &blk : blks_)
       ba->ReturnBlock(blk);
+    blks_.clear();
   }
 
   fuse_ino_t ino() const {
     return ino_;
   }
 
-  const std::vector<BlockAllocator::Block>& blocks() const {
+  std::vector<BlockAllocator::Block>& blocks() {
     return blks_;
   }
 
@@ -369,39 +370,11 @@ class Gassy {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
+    ssize_t ret = Write(in, offset, size, buf);
+    if (ret > 0)
+      fh->pos += ret;
 
-    int ret = in->set_capacity(offset + size, ba_);
-    if (ret)
-      return ret;
-
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    in->i_st.st_ctime = now;
-    in->i_st.st_mtime = now;
-
-    const off_t orig_offset = offset;
-    const char *src = buf;
-
-    size_t left = size;
-    while (left != 0) {
-      size_t blkid = offset / BLOCK_SIZE;
-      size_t blkoff = offset % BLOCK_SIZE;
-      size_t done = std::min(left, BLOCK_SIZE-blkoff);
-
-      const std::vector<BlockAllocator::Block>& blks = in->blocks();
-      assert(blkid < blks.size());
-      const BlockAllocator::Block& b = blks[blkid];
-      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
-
-      left -= done;
-      src += done;
-      offset += done;
-    }
-
-    in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
-
-    fh->pos += size;
-
-    return size;
+    return ret;
   }
 
   /*
@@ -614,10 +587,16 @@ class Gassy {
     if (to_set & FUSE_SET_ATTR_ATIME)
       in->i_st.st_atime = attr->st_atime;
 
-    // FIXME: this is probably really wrong for truncate semantics, plus it
-    // would appear to not free up the extra space...
-    if (to_set & FUSE_SET_ATTR_SIZE)
-      in->i_st.st_size = attr->st_size;
+    if (to_set & FUSE_SET_ATTR_SIZE) {
+      std::cout << "set_size: ino=" << in->ino() << " old=" <<
+        in->i_st.st_size << " new=" << attr->st_size << std::endl;
+      fflush(stdout);
+
+      //in->i_st.st_size = attr->st_size;
+      int ret = Truncate(in, attr->st_size);
+      if (ret < 0)
+        return ret;
+    }
 
 // FIXME: this isn't an option on Darwin?
 #if 0
@@ -753,6 +732,77 @@ class Gassy {
   typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
   typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
   typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
+
+  /*
+   * must hold mutex_
+   */
+  int Truncate(Inode *in, off_t newsize) {
+    std::cout << in->ino() << " " << newsize << std::endl;
+    if (in->i_st.st_size == newsize) {
+      return 0;
+    } else if (in->i_st.st_size > newsize) {
+      std::vector<BlockAllocator::Block>& blks = in->blocks();
+      size_t blkid = newsize / BLOCK_SIZE;
+      assert(blkid < blks.size());
+      for (size_t i = blks.size() - 1; i > blkid; --i) {
+        BlockAllocator::Block blk = blks.back();
+        ba_->ReturnBlock(blk);
+        blks.pop_back();
+      }
+      assert(blkid == (blks.size() - 1));
+      in->i_st.st_size = newsize;
+    } else {
+      char zeros[4096];
+      memset(zeros, 0, sizeof(zeros));
+      while (in->i_st.st_size < newsize) {
+        ssize_t ret = Write(in, in->i_st.st_size,
+            sizeof(zeros), zeros);
+        assert(ret > 0);
+      }
+      if (in->i_st.st_size > newsize)
+        return Truncate(in, newsize);
+      else
+        assert(in->i_st.st_size == newsize);
+    }
+
+    return 0;
+  }
+
+  /*
+   * must hold mutex_
+   */
+  ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf) {
+    int ret = in->set_capacity(offset + size, ba_);
+    if (ret)
+      return ret;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
+    in->i_st.st_mtime = now;
+
+    const off_t orig_offset = offset;
+    const char *src = buf;
+
+    size_t left = size;
+    while (left != 0) {
+      size_t blkid = offset / BLOCK_SIZE;
+      size_t blkoff = offset % BLOCK_SIZE;
+      size_t done = std::min(left, BLOCK_SIZE-blkoff);
+
+      const std::vector<BlockAllocator::Block>& blks = in->blocks();
+      assert(blkid < blks.size());
+      const BlockAllocator::Block& b = blks[blkid];
+      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+
+      left -= done;
+      src += done;
+      offset += done;
+    }
+
+    in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
+
+    return size;
+  }
 
   /*
    *
