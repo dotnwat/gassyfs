@@ -219,6 +219,13 @@ class Gassy {
     if (children.find(name) != children.end())
       return -EEXIST;
 
+    /*
+     * One reference for the name and one for the kernel inode cache. This
+     * call also opens a file handle to the new file. However, it appears that
+     * open does not take a reference on the in-kernel inode, so we shouldn't
+     * need one here. The scenario that is of interest is removing a file that
+     * is open.
+     */
     Inode *in = new Inode(next_ino_++);
     in->get();
 
