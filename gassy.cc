@@ -284,6 +284,8 @@ class Gassy {
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     in->i_st.st_ctime = now;
 
+    in->i_st.st_nlink--;
+
     symlinks_.erase(it->second);
     children.erase(it);
 
@@ -731,13 +733,13 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    std::cout << in->ino() << " " << in->i_st.st_ino << std::endl;
-
     if (in->i_st.st_mode & S_IFDIR)
       return -EPERM;
 
     in->get(); // for newname
     in->get(); // for kernel inode cache
+
+    in->i_st.st_nlink++;
 
     children[newname] = in->ino();
 
