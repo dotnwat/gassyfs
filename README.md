@@ -1,7 +1,7 @@
 gassyfs - distributed in-memory file system over RDMA
 =======
 
-[![license](http://img.shields.io/badge/license-MIT-red.svg?style=flat)](https://raw.githubusercontent.com/noahdesu/gassyfs/master/LICENSE)
+[![license](https://img.shields.io/badge/license-LGPLv2.1-blue.svg)](https://raw.githubusercontent.com/noahdesu/gassyfs/master/LICENSE)
 
 GassyFS is a [FUSE](http://fuse.sourceforge.net/)-based file system that
 stores data in distributed remote memory. Remote memory is managed and
