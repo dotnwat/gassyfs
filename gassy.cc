@@ -727,6 +727,70 @@ class Gassy {
     return 0;
   }
 
+  int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid) {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    if (mask == F_OK)
+      return 0;
+
+    assert(mask & (R_OK | W_OK | X_OK));
+
+    if (in->i_st.st_uid == uid) {
+      if (mask & R_OK) {
+        if (!(in->i_st.st_mode & S_IRUSR))
+          return -EACCES;
+      }
+      if (mask & W_OK) {
+        if (!(in->i_st.st_mode & S_IWUSR))
+          return -EACCES;
+      }
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & S_IXUSR))
+          return -EACCES;
+      }
+      return 0;
+    } else if (in->i_st.st_gid == gid) {
+      if (mask & R_OK) {
+        if (!(in->i_st.st_mode & S_IRGRP))
+          return -EACCES;
+      }
+      if (mask & W_OK) {
+        if (!(in->i_st.st_mode & S_IWGRP))
+          return -EACCES;
+      }
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & S_IXGRP))
+          return -EACCES;
+      }
+      return 0;
+    } else if (uid == 0) {
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)))
+          return -EACCES;
+      }
+      return 0;
+    } else {
+      if (mask & R_OK) {
+        if (!(in->i_st.st_mode & S_IROTH))
+          return -EACCES;
+      }
+      if (mask & W_OK) {
+        if (!(in->i_st.st_mode & S_IWOTH))
+          return -EACCES;
+      }
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & S_IXOTH))
+          return -EACCES;
+      }
+      return 0;
+    }
+
+    assert(0);
+  }
+
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
   typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
@@ -1137,6 +1201,15 @@ static void ll_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
     fuse_reply_err(req, -ret);
 }
 
+static void ll_access(fuse_req_t req, fuse_ino_t ino, int mask)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  int ret = fs->Access(ino, mask, ctx->uid, ctx->gid);
+  fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1188,6 +1261,7 @@ int main(int argc, char *argv[])
   ll_oper.fsyncdir    = ll_fsyncdir;
   ll_oper.statfs      = ll_statfs;
   ll_oper.link        = ll_link;
+  ll_oper.access      = ll_access;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1248,7 +1322,6 @@ static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
 		       struct fuse_file_info *fi, int op);
 
   // easy and priority
-	void (*access) (fuse_req_t req, fuse_ino_t ino, int mask);
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
 		       off_t offset, off_t length, struct fuse_file_info *fi);
 
