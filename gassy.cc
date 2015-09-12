@@ -50,6 +50,7 @@ class BlockAllocator {
 
   BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments)
   {
+    total_bytes_ = 0;
     // FIXME: we don't really fill up the global address space at this point,
     // but it we need to be making sure that everything is aligned when we
     // approach the end of a segment.
@@ -59,9 +60,11 @@ class BlockAllocator {
       n.size = segments[i].size;
       n.curr = n.addr;
       nodes_.push_back(n);
+      total_bytes_ += n.size;
     }
     curr_node = 0;
     num_nodes = nsegments;
+    avail_bytes_ = total_bytes_;
   }
 
   int GetBlock(Block *bp) {
@@ -71,6 +74,7 @@ class BlockAllocator {
       Block b = free_blks_.front();
       free_blks_.pop_front();
       *bp = b;
+      avail_bytes_ -= BLOCK_SIZE;
       return 0;
     }
 
@@ -90,12 +94,24 @@ class BlockAllocator {
     curr_node = (curr_node + 1) % num_nodes;
 
     *bp = bb;
+    avail_bytes_ -= BLOCK_SIZE;
     return 0;
   }
 
   void ReturnBlock(Block b) {
     std::lock_guard<std::mutex> l(mutex_);
     free_blks_.push_back(b);
+    avail_bytes_ += BLOCK_SIZE;
+  }
+
+  uint64_t total_bytes() {
+    std::lock_guard<std::mutex> l(mutex_);
+    return total_bytes_;
+  }
+
+  uint64_t avail_bytes() {
+    std::lock_guard<std::mutex> l(mutex_);
+    return avail_bytes_;
   }
 
  private:
@@ -108,6 +124,9 @@ class BlockAllocator {
   std::deque<Block> free_blks_;
   unsigned curr_node, num_nodes;
   std::vector<Node> nodes_;
+
+  uint64_t total_bytes_;
+  uint64_t avail_bytes_;
 
   std::mutex mutex_;
 };
@@ -203,6 +222,18 @@ class Gassy {
 #endif
     ino_to_inode_[root->ino()] = root;
     children_[FUSE_ROOT_ID] = dir_t();
+
+    memset(&stat, 0, sizeof(stat));
+    stat.f_fsid = 983983;
+    stat.f_namemax = PATH_MAX;
+    stat.f_bsize = 4096;
+    stat.f_frsize = 4096;
+    stat.f_blocks = ba_->total_bytes() / 4096;
+
+    stat.f_files = 0;
+
+    stat.f_bfree = stat.f_blocks;
+    stat.f_bavail = stat.f_blocks;
   }
 
   /*
@@ -690,10 +721,18 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    stbuf->f_fsid = 98238;
-    stbuf->f_namemax = PATH_MAX;
-    stbuf->f_frsize = 4096;
-    stbuf->f_bsize = 4096;
+    uint64_t nfiles = 0;
+    for (inode_table_t::const_iterator it = ino_to_inode_.begin();
+         it != ino_to_inode_.end(); it++) {
+      if (it->second->i_st.st_mode & S_IFREG)
+        nfiles++;
+    }
+
+    stat.f_files = nfiles;
+    stat.f_bfree = ba_->avail_bytes() / 4096;
+    stat.f_bavail = ba_->avail_bytes() / 4096;
+
+    *stbuf = stat;
 
     return 0;
   }
@@ -899,6 +938,7 @@ class Gassy {
   inode_table_t ino_to_inode_;
   symlink_table_t symlinks_;
   BlockAllocator *ba_;
+  struct statvfs stat;
 };
 
 /*
