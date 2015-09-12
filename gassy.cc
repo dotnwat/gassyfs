@@ -657,6 +657,7 @@ class Gassy {
 #if 0
     in->i_st.st_birthtime = now;
 #endif
+    in->i_st.st_size = link.length();
 
     *st = in->i_st;
 
