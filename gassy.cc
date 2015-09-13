@@ -594,10 +594,10 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    if (in->i_st.st_uid != uid)
+    if (uid && in->i_st.st_uid != uid)
       return -EPERM;
 
-    if (in->i_st.st_gid != gid)
+    if (uid && in->i_st.st_gid != gid)
       clear_mode |= S_ISGID;
 
     std::time_t now = std::chrono::system_clock::to_time_t(
