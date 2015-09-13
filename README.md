@@ -38,3 +38,11 @@ make distclean
 ```bash
 iozone -a
 ```
+
+```bash
+git clone --recursive https://github.com/ceph/ceph.git
+cd ceph
+./autogen.sh
+./configure --with-debug
+make -j10
+```
