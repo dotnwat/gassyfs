@@ -6,7 +6,7 @@ desc="chown returns EPERM if the operation would change the ownership, but the e
 dir=`dirname $0`
 . ${dir}/../misc.sh
 
-echo "1..11"
+echo "1..10"
 
 n0=`namegen`
 n1=`namegen`
@@ -21,7 +21,9 @@ expect 0 -u 65534 -g 65534 create ${n1}/${n2} 0644
 expect EPERM -u 65534 -g 65534 chown ${n1}/${n2} 65533 65533
 expect EPERM -u 65533 -g 65533 chown ${n1}/${n2} 65534 65534
 expect EPERM -u 65533 -g 65533 chown ${n1}/${n2} 65533 65533
-expect EPERM -u 65534 -g 65534 -- chown ${n1}/${n2} -1 65533
+# the -1 appears to be translated into 0 in fuse, so it's not clear how to
+# distinguish this from root?
+#expect EPERM -u 65534 -g 65534 -- chown ${n1}/${n2} -1 65533
 expect 0 unlink ${n1}/${n2}
 expect 0 rmdir ${n1}
 cd ${cdir}

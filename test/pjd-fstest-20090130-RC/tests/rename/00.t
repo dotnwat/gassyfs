@@ -87,6 +87,7 @@ expect 0 rename ${n0} ${n1}
 ctime2=`${fstest} stat ${n1} ctime`
 test_check $ctime1 -lt $ctime2
 expect 0 rmdir ${n1}
+#40
 
 expect 0 mkfifo ${n0} 0644
 ctime1=`${fstest} stat ${n0} ctime`
