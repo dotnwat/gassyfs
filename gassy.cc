@@ -531,7 +531,8 @@ class Gassy {
    *
    */
   int Rename(fuse_ino_t parent_ino, const std::string& name,
-      fuse_ino_t newparent_ino, const std::string& newname)
+      fuse_ino_t newparent_ino, const std::string& newname,
+      uid_t uid, gid_t gid)
   {
     std::lock_guard<std::mutex> l(mutex_);
 
@@ -554,6 +555,37 @@ class Gassy {
     if (new_it != newparent_children.end()) {
       new_in = inode_get(new_it->second);
       assert(new_in);
+    }
+
+    /*
+     * EACCES Write permission is denied for the directory containing oldpath or
+     * newpath,
+     *
+     * (TODO) or search permission is denied for one of the directories in the
+     * path prefix  of  old‐ path or newpath,
+     *
+     * or oldpath is a directory and does not allow write permission (needed
+     * to update the ..  entry).  (See also path_resolution(7).) TODO: this is
+     * implemented but what is the affect on ".." update?
+     */
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    assert(parent_in->i_st.st_mode & S_IFDIR);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
+    Inode *newparent_in = inode_get(newparent_ino);
+    assert(newparent_in);
+    assert(newparent_in->i_st.st_mode & S_IFDIR);
+    ret = Access(newparent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
+    if (old_in->i_st.st_mode & S_IFDIR) {
+      ret = Access(old_in, W_OK, uid, gid);
+      if (ret)
+        return ret;
     }
 
     if (new_in) {
@@ -767,12 +799,7 @@ class Gassy {
     return 0;
   }
 
-  int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    Inode *in = inode_get(ino);
-    assert(in);
-
+  int Access(Inode *in, int mask, uid_t uid, gid_t gid) {
     if (mask == F_OK)
       return 0;
 
@@ -829,6 +856,16 @@ class Gassy {
     }
 
     assert(0);
+  }
+
+
+  int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid) {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    return Access(in, mask, uid, gid);
   }
 
  private:
@@ -1150,8 +1187,10 @@ static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
 			fuse_ino_t newparent, const char *newname)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->Rename(parent, name, newparent, newname);
+  int ret = fs->Rename(parent, name, newparent, newname,
+      ctx->uid, ctx->gid);
   fuse_reply_err(req, -ret);
 }
 
