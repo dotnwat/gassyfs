@@ -591,6 +591,35 @@ class Gassy {
         return ret;
     }
 
+    /*
+    * EPERM or EACCES The  directory  containing  oldpath  has the sticky bit
+    * (S_ISVTX) set and the process's effective user ID is neither the user ID
+    * of the file to be deleted nor that of the directory containing it, and
+    * the process is not privileged (Linux: does not have the CAP_FOWNER
+    * capability);
+    *
+    * or newpath is an existing file and the directory containing it has the
+    * sticky bit set and the process's effective user ID is neither the user
+    * ID of the  file to  be  replaced  nor that of the directory containing
+    * it, and the process is not privileged (Linux: does not have the
+    * CAP_FOWNER capability);
+    *
+    * or the filesystem containing pathname does not support renaming of the
+    * type requested.
+    */
+    if (parent_in->i_st.st_mode & S_ISVTX) {
+      if (uid && uid != old_in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+        return -EPERM;
+    }
+
+    if (new_in &&
+        newparent_in->i_st.st_mode & S_ISVTX &&
+        uid && uid != new_in->i_st.st_uid &&
+        uid != newparent_in->i_st.st_uid) {
+      return -EPERM;
+    }
+
+
     if (new_in) {
       if (old_in->i_st.st_mode & S_IFDIR) {
         if (new_in->i_st.st_mode & S_IFDIR) {
