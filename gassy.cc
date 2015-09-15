@@ -243,7 +243,7 @@ class Gassy {
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (name.length() >= PATH_MAX)
+    if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
@@ -461,7 +461,7 @@ class Gassy {
       struct stat *st, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (name.length() >= PATH_MAX)
+    if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
@@ -535,6 +535,9 @@ class Gassy {
       uid_t uid, gid_t gid)
   {
     std::lock_guard<std::mutex> l(mutex_);
+
+    if (name.length() > NAME_MAX || newname.length() > NAME_MAX)
+      return -ENAMETOOLONG;
 
     // old
     assert(children_.find(parent_ino) != children_.end());
@@ -692,7 +695,7 @@ class Gassy {
     std::lock_guard<std::mutex> l(mutex_);
 
     // TODO: check length of link path components
-    if (name.length() >= PATH_MAX)
+    if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
@@ -773,7 +776,7 @@ class Gassy {
       struct stat *st, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (newname.length() >= PATH_MAX)
+    if (newname.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(newparent_ino) != children_.end());
