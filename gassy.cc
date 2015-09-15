@@ -900,6 +900,48 @@ class Gassy {
     return Access(in, mask, uid, gid);
   }
 
+  /*
+   * Allow mknod to create special files, but enforce that these files are
+   * never used in anything other than metadata operations.
+   *
+   * TODO: add checks that enforce non-use of special files. Note that this
+   * routine can also create regular files.
+   */
+  int Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+      dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    if (name.length() > NAME_MAX)
+      return -ENAMETOOLONG;
+
+    assert(children_.find(parent_ino) != children_.end());
+    dir_t& children = children_.at(parent_ino);
+    if (children.find(name) != children.end())
+      return -EEXIST;
+
+    Inode *in = new Inode(next_ino_++);
+    in->get();
+
+    children[name] = in->ino();
+    ino_to_inode_[in->ino()] = in;
+
+    in->i_st.st_ino = in->ino();
+    in->i_st.st_mode = mode;
+    in->i_st.st_nlink = 1;
+    in->i_st.st_blksize = 4096;
+    in->i_st.st_uid = uid;
+    in->i_st.st_gid = gid;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
+    in->i_st.st_mtime = now;
+    in->i_st.st_ctime = now;
+
+    *st = in->i_st;
+
+    return 0;
+  }
+
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
   typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
@@ -1322,6 +1364,23 @@ static void ll_access(fuse_req_t req, fuse_ino_t ino, int mask)
   fuse_reply_err(req, -ret);
 }
 
+static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
+    mode_t mode, dev_t rdev)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  struct fuse_entry_param fe;
+  memset(&fe, 0, sizeof(fe));
+
+  int ret = fs->Mknod(parent, name, mode, rdev, &fe.attr, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
+    fuse_reply_entry(req, &fe);
+  } else
+    fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1374,6 +1433,7 @@ int main(int argc, char *argv[])
   ll_oper.statfs      = ll_statfs;
   ll_oper.link        = ll_link;
   ll_oper.access      = ll_access;
+  ll_oper.mknod       = ll_mknod;
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1409,8 +1469,6 @@ int main(int argc, char *argv[])
   // not a huge priority
 	void (*init) (void *userdata, struct fuse_conn_info *conn);
 	void (*destroy) (void *userdata);
-static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
-    mode_t mode, dev_t rdev)
 	void (*opendir) (fuse_req_t req, fuse_ino_t ino,
 			 struct fuse_file_info *fi);
 	void (*releasedir) (fuse_req_t req, fuse_ino_t ino,
