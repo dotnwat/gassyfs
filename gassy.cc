@@ -499,7 +499,8 @@ class Gassy {
   /*
    *
    */
-  int Rmdir(fuse_ino_t parent_ino, const std::string& name) {
+  int Rmdir(fuse_ino_t parent_ino, const std::string& name,
+      uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
@@ -519,8 +520,20 @@ class Gassy {
     if (it2->second.size())
       return -ENOTEMPTY;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+
+    if (parent_in->i_st.st_mode & S_ISVTX) {
+      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+        return -EPERM;
+    }
+
     children.erase(it);
     children_.erase(it2);
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    parent_in->i_st.st_mtime = now;
+    parent_in->i_st.st_ctime = now;
 
     put_inode(in->ino());
 
@@ -1252,8 +1265,9 @@ static void ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
 static void ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->Rmdir(parent, name);
+  int ret = fs->Rmdir(parent, name, ctx->uid, ctx->gid);
   fuse_reply_err(req, -ret);
 }
 
