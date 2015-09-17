@@ -785,6 +785,12 @@ class Gassy {
     if (children.find(name) != children.end())
       return -EEXIST;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     Inode *in = new Inode(next_ino_++);
     in->get();
 
@@ -806,6 +812,9 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
     in->i_st.st_size = link.length();
+
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
 
     *st = in->i_st;
 
@@ -985,6 +994,12 @@ class Gassy {
     if (children.find(name) != children.end())
       return -EEXIST;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     Inode *in = new Inode(next_ino_++);
     in->get();
 
@@ -1001,6 +1016,9 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
+
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
 
     *st = in->i_st;
 
