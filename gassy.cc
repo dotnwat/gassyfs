@@ -272,6 +272,11 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
+
     *st = in->i_st;
 
     FileHandle *fh = new FileHandle(in);
@@ -295,7 +300,7 @@ class Gassy {
   /*
    *
    */
-  int Unlink(fuse_ino_t parent_ino, const std::string& name) {
+  int Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
@@ -304,11 +309,27 @@ class Gassy {
     if (it == children.end())
       return -ENOENT;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     Inode *in = inode_get(it->second);
-    assert(!(in->i_st.st_mode & S_IFDIR));
     assert(in);
+    assert(!(in->i_st.st_mode & S_IFDIR));
+
+    if (parent_in->i_st.st_mode & S_ISVTX) {
+      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+        return -EPERM;
+    }
+
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     in->i_st.st_ctime = now;
+
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
 
     in->i_st.st_nlink--;
 
@@ -1122,8 +1143,9 @@ static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
 static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->Unlink(parent, name);
+  int ret = fs->Unlink(parent, name, ctx->uid, ctx->gid);
   fuse_reply_err(req, -ret);
 }
 
