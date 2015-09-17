@@ -837,10 +837,22 @@ class Gassy {
     if (in->i_st.st_mode & S_IFDIR)
       return -EPERM;
 
+    Inode *newparent_in = inode_get(newparent_ino);
+    assert(newparent_in);
+
+    int ret = Access(newparent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     in->get(); // for newname
     in->get(); // for kernel inode cache
 
     in->i_st.st_nlink++;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
+    newparent_in->i_st.st_ctime = now;
+    newparent_in->i_st.st_mtime = now;
 
     children[newname] = in->ino();
 
