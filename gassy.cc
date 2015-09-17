@@ -18,16 +18,10 @@
 #include <chrono>
 #include <mutex>
 #include <cstring>
+#include <cassert>
 
 #include <fuse.h>
 #include <fuse_lowlevel.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <assert.h>
 #include <gasnet.h>
 
 #include "common.h"
