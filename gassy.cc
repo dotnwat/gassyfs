@@ -245,6 +245,12 @@ class Gassy {
     if (children.find(name) != children.end())
       return -EEXIST;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     /*
      * One reference for the name and one for the kernel inode cache. This
      * call also opens a file handle to the new file. However, it appears that
@@ -272,8 +278,6 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
 
@@ -375,17 +379,28 @@ class Gassy {
     assert(in);
 
     int mode = 0;
-    if (flags & O_RDONLY)
+    if ((flags & O_ACCMODE) == O_RDONLY)
       mode = R_OK;
-    else if (flags & O_WRONLY)
+    else if ((flags & O_ACCMODE) == O_WRONLY)
       mode = W_OK;
-    else if (flags & O_RDWR)
+    else if ((flags & O_ACCMODE) == O_RDWR)
       mode = R_OK | W_OK;
 
-    assert(mode);
+    if (!(mode & W_OK) && (flags & O_TRUNC))
+      return -EACCES;
+
     int ret = Access(in, mode, uid, gid);
     if (ret)
       return ret;
+
+    if (flags & O_TRUNC) {
+      ret = Truncate(in, 0, uid, gid);
+      if (ret)
+        return ret;
+      std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      in->i_st.st_mtime = now;
+      in->i_st.st_ctime = now;
+    }
 
     FileHandle *fh = new FileHandle(in);
     *fhp = fh;
@@ -497,6 +512,12 @@ class Gassy {
     if (children.find(name) != children.end())
       return -EEXIST;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     Inode *in = new Inode(next_ino_++);
     in->get();
 
@@ -515,8 +536,8 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
     parent_in->i_st.st_nlink++;
 
     *st = in->i_st;
@@ -714,7 +735,7 @@ class Gassy {
       if (uid && in->i_st.st_gid != gid)
         clear_mode |= S_ISGID;
 
-      in->i_st.st_mode = (in->i_st.st_mode & ~07777) | (attr->st_mode & 07777);
+      in->i_st.st_mode = attr->st_mode;
     }
 
     if (to_set & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)) {
