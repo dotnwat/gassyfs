@@ -775,8 +775,11 @@ class Gassy {
     }
 
     if (to_set & FUSE_SET_ATTR_SIZE) {
-      if (uid && in->i_st.st_uid != uid)
-        return -EPERM;
+      if (uid) {
+        int ret = Access(in, W_OK, uid, gid);
+        if (ret)
+          return ret;
+      }
 
       // impose maximum size of 2TB
       if (attr->st_size > 2199023255552)
@@ -785,6 +788,7 @@ class Gassy {
       int ret = Truncate(in, attr->st_size, uid, gid);
       if (ret < 0)
         return ret;
+
       in->i_st.st_mtime = now;
     }
 
