@@ -1228,6 +1228,20 @@ static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
   fuse_reply_err(req, -ret);
 }
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
+void ll_forget_multi(fuse_req_t req, size_t count,
+    struct fuse_forget_data *forgets)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  for (size_t i = 0; i < count; i++) {
+    const struct fuse_forget_data *f = forgets + i;
+    fs->Forget(f->ino, f->nlookup);
+  }
+
+  fuse_reply_none(req);
+}
+#else
 static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
@@ -1235,6 +1249,8 @@ static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
   fs->Forget(ino, nlookup);
   fuse_reply_none(req);
 }
+
+#endif
 
 static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
@@ -1557,7 +1573,6 @@ int main(int argc, char *argv[])
   ll_oper.create      = ll_create;
   ll_oper.release     = ll_release;
   ll_oper.unlink      = ll_unlink;
-  ll_oper.forget      = ll_forget;
   ll_oper.mkdir       = ll_mkdir;
   ll_oper.rmdir       = ll_rmdir;
   ll_oper.rename      = ll_rename;
@@ -1570,6 +1585,11 @@ int main(int argc, char *argv[])
   ll_oper.link        = ll_link;
   ll_oper.access      = ll_access;
   ll_oper.mknod       = ll_mknod;
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
+  ll_oper.forget_multi = ll_forget_multi;
+#else
+  ll_oper.forget      = ll_forget;
+#endif
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1637,8 +1657,6 @@ int main(int argc, char *argv[])
 			   struct fuse_file_info *fi);
 	void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino,
 				off_t offset, struct fuse_bufvec *bufv);
-	void (*forget_multi) (fuse_req_t req, size_t count,
-			      struct fuse_forget_data *forgets);
 
   // v2
 	void (*ioctl) (fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
