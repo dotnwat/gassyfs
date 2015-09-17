@@ -481,6 +481,10 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    parent_in->i_st.st_nlink++;
+
     *st = in->i_st;
 
     children_[in->ino()] = dir_t();
@@ -528,6 +532,7 @@ class Gassy {
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     parent_in->i_st.st_mtime = now;
     parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_nlink--;
 
     put_inode(in->ino());
 
