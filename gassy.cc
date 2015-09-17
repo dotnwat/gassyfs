@@ -704,37 +704,58 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    // truncate will do its own access check
-    if (!(to_set & FUSE_SET_ATTR_SIZE)) {
-        if (uid && in->i_st.st_uid != uid)
-        return -EPERM;
-
-        if (uid && in->i_st.st_gid != gid)
-        clear_mode |= S_ISGID;
-    }
-
     std::time_t now = std::chrono::system_clock::to_time_t(
         std::chrono::system_clock::now());
 
-    if (to_set & FUSE_SET_ATTR_MODE)
+    if (to_set & FUSE_SET_ATTR_MODE) {
+      if (uid && in->i_st.st_uid != uid)
+        return -EPERM;
+
+      if (uid && in->i_st.st_gid != gid)
+        clear_mode |= S_ISGID;
+
       in->i_st.st_mode = (in->i_st.st_mode & ~07777) | (attr->st_mode & 07777);
+    }
 
-    if (to_set & FUSE_SET_ATTR_UID)
-      in->i_st.st_uid = attr->st_uid;
+    if (to_set & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)) {
+      /*
+       * Only  a  privileged  process  (Linux: one with the CAP_CHOWN capability)
+       * may change the owner of a file.  The owner of a file may change the
+       * group of the file to any group of which that owner is a member.  A
+       * privileged process (Linux: with CAP_CHOWN) may change the group
+       * arbitrarily.
+       *
+       * TODO: group membership for owner is not enforced.
+       */
+      if (uid && (to_set & FUSE_SET_ATTR_UID) &&
+          (in->i_st.st_uid != attr->st_uid))
+        return -EPERM;
 
-    if (to_set & FUSE_SET_ATTR_GID)
-      in->i_st.st_gid = attr->st_gid;
+      if (uid && (to_set & FUSE_SET_ATTR_GID) &&
+          (uid != in->i_st.st_uid))
+        return -EPERM;
 
-    if (to_set & FUSE_SET_ATTR_MTIME)
-      in->i_st.st_mtime = attr->st_mtime;
+      if (to_set & FUSE_SET_ATTR_UID)
+        in->i_st.st_uid = attr->st_uid;
 
-    if (to_set & FUSE_SET_ATTR_ATIME)
-      in->i_st.st_atime = attr->st_atime;
+      if (to_set & FUSE_SET_ATTR_GID)
+        in->i_st.st_gid = attr->st_gid;
+    }
+
+    if (to_set & (FUSE_SET_ATTR_MTIME | FUSE_SET_ATTR_ATIME)) {
+      if (uid && in->i_st.st_uid != uid)
+        return -EPERM;
+
+      if (to_set & FUSE_SET_ATTR_MTIME)
+        in->i_st.st_mtime = attr->st_mtime;
+
+      if (to_set & FUSE_SET_ATTR_ATIME)
+        in->i_st.st_atime = attr->st_atime;
+    }
 
     if (to_set & FUSE_SET_ATTR_SIZE) {
-      std::cout << "set_size: ino=" << in->ino() << " old=" <<
-        in->i_st.st_size << " new=" << attr->st_size << std::endl;
-      fflush(stdout);
+      if (uid && in->i_st.st_uid != uid)
+        return -EPERM;
 
       // impose maximum size of 2TB
       if (attr->st_size > 2199023255552)
@@ -764,7 +785,8 @@ class Gassy {
 
     in->i_st.st_ctime = now;
 
-    in->i_st.st_mode &= ~clear_mode;
+    if (to_set & FUSE_SET_ATTR_MODE)
+      in->i_st.st_mode &= ~clear_mode;
 
     *attr = in->i_st;
 
