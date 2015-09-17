@@ -368,11 +368,24 @@ class Gassy {
   /*
    *
    */
-  int Open(fuse_ino_t ino, FileHandle **fhp) {
+  int Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
     assert(in);
+
+    int mode = 0;
+    if (flags & O_RDONLY)
+      mode = R_OK;
+    else if (flags & O_WRONLY)
+      mode = W_OK;
+    else if (flags & O_RDWR)
+      mode = R_OK | W_OK;
+
+    assert(mode);
+    int ret = Access(in, mode, uid, gid);
+    if (ret)
+      return ret;
 
     FileHandle *fh = new FileHandle(in);
     *fhp = fh;
@@ -1244,11 +1257,12 @@ static void ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
   FileHandle *fh;
 
   assert(!(fi->flags & O_CREAT));
 
-  int ret = fs->Open(ino, &fh);
+  int ret = fs->Open(ino, fi->flags, &fh, ctx->uid, ctx->gid);
   if (ret == 0) {
     fi->fh = (long)fh;
     fuse_reply_open(req, fi);
