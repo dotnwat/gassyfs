@@ -671,11 +671,14 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    if (uid && in->i_st.st_uid != uid)
-      return -EPERM;
+    // truncate will do its own access check
+    if (!(to_set & FUSE_SET_ATTR_SIZE)) {
+        if (uid && in->i_st.st_uid != uid)
+        return -EPERM;
 
-    if (uid && in->i_st.st_gid != gid)
-      clear_mode |= S_ISGID;
+        if (uid && in->i_st.st_gid != gid)
+        clear_mode |= S_ISGID;
+    }
 
     std::time_t now = std::chrono::system_clock::to_time_t(
         std::chrono::system_clock::now());
@@ -700,8 +703,11 @@ class Gassy {
         in->i_st.st_size << " new=" << attr->st_size << std::endl;
       fflush(stdout);
 
-      //in->i_st.st_size = attr->st_size;
-      int ret = Truncate(in, attr->st_size);
+      // impose maximum size of 2TB
+      if (attr->st_size > 2199023255552)
+        return -EFBIG;
+
+      int ret = Truncate(in, attr->st_size, uid, gid);
       if (ret < 0)
         return ret;
     }
@@ -964,8 +970,11 @@ class Gassy {
   /*
    * must hold mutex_
    */
-  int Truncate(Inode *in, off_t newsize) {
+  int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid) {
     std::cout << in->ino() << " " << newsize << std::endl;
+    int ret = Access(in, W_OK, uid, gid);
+    if (ret)
+      return ret;
     if (in->i_st.st_size == newsize) {
       return 0;
     } else if (in->i_st.st_size > newsize) {
@@ -988,7 +997,7 @@ class Gassy {
         assert(ret > 0);
       }
       if (in->i_st.st_size > newsize)
-        return Truncate(in, newsize);
+        return Truncate(in, newsize, uid, gid);
       else
         assert(in->i_st.st_size == newsize);
     }
