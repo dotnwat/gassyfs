@@ -743,6 +743,7 @@ class Gassy {
       int ret = Truncate(in, attr->st_size, uid, gid);
       if (ret < 0)
         return ret;
+      in->i_st.st_mtime = now;
     }
 
 // FIXME: this isn't an option on Darwin?
