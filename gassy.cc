@@ -10,6 +10,7 @@
 
 #define FUSE_USE_VERSION 30
 
+#include <map>
 #include <unordered_map>
 #include <string>
 #include <deque>
@@ -292,10 +293,11 @@ class Gassy {
   /*
    *
    */
-  int GetAttr(fuse_ino_t ino, struct stat *st) {
+  int GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
+    assert(in);
     *st = in->i_st;
 
     return 0;
@@ -419,22 +421,6 @@ class Gassy {
   void Forget(fuse_ino_t ino, long unsigned nlookup) {
     std::lock_guard<std::mutex> l(mutex_);
     put_inode(ino, nlookup);
-  }
-
-  /*
-   *
-   */
-  void PathNames(fuse_ino_t ino, std::vector<std::string>& names) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    assert(children_.find(ino) != children_.end());
-    const dir_t& children = children_.at(ino);
-
-    std::vector<std::string> out;
-    for (auto &it : children) {
-      out.push_back(it.first);
-    }
-    names.swap(out);
   }
 
   /*
@@ -1072,9 +1058,100 @@ class Gassy {
     return 0;
   }
 
+  int OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid) {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    if ((flags & O_ACCMODE) == O_RDONLY) {
+      int ret = Access(in, R_OK, uid, gid);
+      if (ret)
+        return ret;
+    }
+
+    return 0;
+  }
+
+  /*
+   * This is a work-in-progress. It currently is functioning, but I think that
+   * the it is not robust against concurrent modifications. The common
+   * approach it seems is to encode a cookie in the offset parameter. Current
+   * we just do an in-order traversal of the directory and return the Nth
+   * item.
+   */
+  ssize_t ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
+      size_t bufsize, off_t off)
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+
+    size_t pos = 0;
+
+    /*
+     * FIXME: the ".." directory correctly shows up at the parent directory
+     * inode, but "." shows a inode number as "?" with ls -lia.
+     */
+    if (off == 0) {
+      size_t remaining = bufsize - pos;
+      memset(&st, 0, sizeof(st));
+      st.st_ino = 1;
+      size_t used = fuse_add_direntry(req, buf + pos, remaining, ".", &st, 1);
+      if (used > remaining)
+        return pos;
+      pos += used;
+      off = 1;
+    }
+
+    if (off == 1) {
+      size_t remaining = bufsize - pos;
+      memset(&st, 0, sizeof(st));
+      st.st_ino = 1;
+      size_t used = fuse_add_direntry(req, buf + pos, remaining, "..", &st, 2);
+      if (used > remaining)
+        return pos;
+      pos += used;
+      off = 2;
+    }
+
+    assert(off >= 2);
+
+    assert(children_.find(ino) != children_.end());
+    const dir_t& children = children_.at(ino);
+
+    size_t count = 0;
+    size_t target = off - 2;
+
+    for (dir_t::const_iterator it = children.begin();
+        it != children.end(); it++) {
+      if (count >= target) {
+        Inode *in = inode_get(it->second);
+        assert(in);
+        memset(&st, 0, sizeof(st));
+        st.st_ino = in->i_st.st_ino;
+        size_t remaining = bufsize - pos;
+        size_t used = fuse_add_direntry(req, buf + pos, remaining, it->first.c_str(), &st, off + 1);
+        if (used > remaining)
+          return pos;
+        pos += used;
+        off++;
+      }
+      count++;
+    }
+
+    return pos;
+  }
+
+  /*
+   *
+   */
+  void ReleaseDir(fuse_ino_t ino) {}
+
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-  typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
+  typedef std::map<std::string, fuse_ino_t> dir_t;
   typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
   typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
 
@@ -1214,8 +1291,8 @@ static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   FileHandle *fh = (FileHandle*)fi->fh;
 
-  delete fh;
   fs->Release(ino);
+  delete fh;
   fuse_reply_err(req, 0);
 }
 
@@ -1256,9 +1333,10 @@ static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
   struct stat st;
 
-  int ret = fs->GetAttr(ino, &st);
+  int ret = fs->GetAttr(ino, &st, ctx->uid, ctx->gid);
   if (ret == 0)
     fuse_reply_attr(req, &st, ret);
   else
@@ -1281,34 +1359,21 @@ static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     fuse_reply_err(req, -ret);
 }
 
-struct dirbuf {
-	char *p;
-	size_t size;
-};
-
-static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
-		       fuse_ino_t ino)
+/*
+ *
+ */
+static void ll_opendir(fuse_req_t req, fuse_ino_t ino,
+			 struct fuse_file_info *fi)
 {
-	struct stat stbuf;
-	size_t oldsize = b->size;
-	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-	b->p = (char *) realloc(b->p, b->size);
-	memset(&stbuf, 0, sizeof(stbuf));
-	stbuf.st_ino = ino;
-	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf,
-			  b->size);
-}
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-#define xmin(x, y) ((x) < (y) ? (x) : (y))
-
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
-			     off_t off, size_t maxsize)
-{
-	if (off < (off_t)bufsize)
-		return fuse_reply_buf(req, buf + off,
-				      xmin(bufsize - off, maxsize));
-	else
-		return fuse_reply_buf(req, NULL, 0);
+  int ret = fs->OpenDir(ino, fi->flags, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fuse_reply_open(req, fi);
+  } else {
+    fuse_reply_err(req, -ret);
+  }
 }
 
 /*
@@ -1319,21 +1384,31 @@ static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  struct dirbuf b;
-  memset(&b, 0, sizeof(b));
-  dirbuf_add(req, &b, ".", 1);
-  dirbuf_add(req, &b, "..", 1);
+  char *buf = new char[size];
 
-  std::vector<std::string> names;
-  fs->PathNames(ino, names);
-
-  for (std::vector<std::string>::const_iterator it = names.begin(); it != names.end(); it++) {
-    dirbuf_add(req, &b, it->c_str(), strlen(it->c_str()));
+  ssize_t ret = fs->ReadDir(req, ino, buf, size, off);
+  if (ret >= 0) {
+    fuse_reply_buf(req, buf, (size_t)ret);
+  } else {
+    int r = (int)ret;
+    fuse_reply_err(req, -r);
   }
 
-  reply_buf_limited(req, b.p, b.size, off, size);
-  free(b.p);
+  delete [] buf;
 }
+
+/*
+ *
+ */
+static void ll_releasedir(fuse_req_t req, fuse_ino_t ino,
+			    struct fuse_file_info *fi)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  fs->ReleaseDir(ino);
+  fuse_reply_err(req, 0);
+}
+
 
 static void ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
@@ -1566,7 +1641,9 @@ int main(int argc, char *argv[])
   memset(&ll_oper, 0, sizeof(ll_oper));
   ll_oper.lookup      = ll_lookup;
   ll_oper.getattr     = ll_getattr;
+  ll_oper.opendir     = ll_opendir;
   ll_oper.readdir     = ll_readdir;
+  ll_oper.releasedir  = ll_releasedir;
   ll_oper.open        = ll_open;
   ll_oper.read        = ll_read;
   ll_oper.write        = ll_write;
@@ -1624,10 +1701,6 @@ int main(int argc, char *argv[])
 #if 0
 	void (*init) (void *userdata, struct fuse_conn_info *conn);
 	void (*destroy) (void *userdata);
-	void (*opendir) (fuse_req_t req, fuse_ino_t ino,
-			 struct fuse_file_info *fi);
-	void (*releasedir) (fuse_req_t req, fuse_ino_t ino,
-			    struct fuse_file_info *fi);
 	void (*poll) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi,
 		      struct fuse_pollhandle *ph);
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
