@@ -10,6 +10,7 @@
 
 #define FUSE_USE_VERSION 30
 
+#include <map>
 #include <unordered_map>
 #include <string>
 #include <deque>
@@ -18,16 +19,10 @@
 #include <chrono>
 #include <mutex>
 #include <cstring>
+#include <cassert>
 
 #include <fuse.h>
 #include <fuse_lowlevel.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <assert.h>
 #include <gasnet.h>
 
 #include "common.h"
@@ -50,6 +45,7 @@ class BlockAllocator {
 
   BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments)
   {
+    total_bytes_ = 0;
     // FIXME: we don't really fill up the global address space at this point,
     // but it we need to be making sure that everything is aligned when we
     // approach the end of a segment.
@@ -59,9 +55,11 @@ class BlockAllocator {
       n.size = segments[i].size;
       n.curr = n.addr;
       nodes_.push_back(n);
+      total_bytes_ += n.size;
     }
     curr_node = 0;
     num_nodes = nsegments;
+    avail_bytes_ = total_bytes_;
   }
 
   int GetBlock(Block *bp) {
@@ -71,6 +69,7 @@ class BlockAllocator {
       Block b = free_blks_.front();
       free_blks_.pop_front();
       *bp = b;
+      avail_bytes_ -= BLOCK_SIZE;
       return 0;
     }
 
@@ -90,12 +89,24 @@ class BlockAllocator {
     curr_node = (curr_node + 1) % num_nodes;
 
     *bp = bb;
+    avail_bytes_ -= BLOCK_SIZE;
     return 0;
   }
 
   void ReturnBlock(Block b) {
     std::lock_guard<std::mutex> l(mutex_);
     free_blks_.push_back(b);
+    avail_bytes_ += BLOCK_SIZE;
+  }
+
+  uint64_t total_bytes() {
+    std::lock_guard<std::mutex> l(mutex_);
+    return total_bytes_;
+  }
+
+  uint64_t avail_bytes() {
+    std::lock_guard<std::mutex> l(mutex_);
+    return avail_bytes_;
   }
 
  private:
@@ -108,6 +119,9 @@ class BlockAllocator {
   std::deque<Block> free_blks_;
   unsigned curr_node, num_nodes;
   std::vector<Node> nodes_;
+
+  uint64_t total_bytes_;
+  uint64_t avail_bytes_;
 
   std::mutex mutex_;
 };
@@ -151,13 +165,14 @@ class Inode {
   void free_blocks(BlockAllocator *ba) {
     for (auto &blk : blks_)
       ba->ReturnBlock(blk);
+    blks_.clear();
   }
 
   fuse_ino_t ino() const {
     return ino_;
   }
 
-  const std::vector<BlockAllocator::Block>& blocks() const {
+  std::vector<BlockAllocator::Block>& blocks() {
     return blks_;
   }
 
@@ -202,6 +217,18 @@ class Gassy {
 #endif
     ino_to_inode_[root->ino()] = root;
     children_[FUSE_ROOT_ID] = dir_t();
+
+    memset(&stat, 0, sizeof(stat));
+    stat.f_fsid = 983983;
+    stat.f_namemax = PATH_MAX;
+    stat.f_bsize = 4096;
+    stat.f_frsize = 4096;
+    stat.f_blocks = ba_->total_bytes() / 4096;
+
+    stat.f_files = 0;
+
+    stat.f_bfree = stat.f_blocks;
+    stat.f_bavail = stat.f_blocks;
   }
 
   /*
@@ -211,13 +238,19 @@ class Gassy {
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (name.length() >= PATH_MAX)
+    if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
+
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
 
     /*
      * One reference for the name and one for the kernel inode cache. This
@@ -246,6 +279,9 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
 
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
+
     *st = in->i_st;
 
     FileHandle *fh = new FileHandle(in);
@@ -257,10 +293,11 @@ class Gassy {
   /*
    *
    */
-  int GetAttr(fuse_ino_t ino, struct stat *st) {
+  int GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
+    assert(in);
     *st = in->i_st;
 
     return 0;
@@ -269,7 +306,7 @@ class Gassy {
   /*
    *
    */
-  int Unlink(fuse_ino_t parent_ino, const std::string& name) {
+  int Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
@@ -278,11 +315,27 @@ class Gassy {
     if (it == children.end())
       return -ENOENT;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     Inode *in = inode_get(it->second);
-    assert(!(in->i_st.st_mode & S_IFDIR));
     assert(in);
+    assert(!(in->i_st.st_mode & S_IFDIR));
+
+    if (parent_in->i_st.st_mode & S_ISVTX) {
+      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+        return -EPERM;
+    }
+
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     in->i_st.st_ctime = now;
+
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
 
     in->i_st.st_nlink--;
 
@@ -321,11 +374,35 @@ class Gassy {
   /*
    *
    */
-  int Open(fuse_ino_t ino, FileHandle **fhp) {
+  int Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = inode_get(ino);
     assert(in);
+
+    int mode = 0;
+    if ((flags & O_ACCMODE) == O_RDONLY)
+      mode = R_OK;
+    else if ((flags & O_ACCMODE) == O_WRONLY)
+      mode = W_OK;
+    else if ((flags & O_ACCMODE) == O_RDWR)
+      mode = R_OK | W_OK;
+
+    if (!(mode & W_OK) && (flags & O_TRUNC))
+      return -EACCES;
+
+    int ret = Access(in, mode, uid, gid);
+    if (ret)
+      return ret;
+
+    if (flags & O_TRUNC) {
+      ret = Truncate(in, 0, uid, gid);
+      if (ret)
+        return ret;
+      std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      in->i_st.st_mtime = now;
+      in->i_st.st_ctime = now;
+    }
 
     FileHandle *fh = new FileHandle(in);
     *fhp = fh;
@@ -349,59 +426,15 @@ class Gassy {
   /*
    *
    */
-  void PathNames(fuse_ino_t ino, std::vector<std::string>& names) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    assert(children_.find(ino) != children_.end());
-    const dir_t& children = children_.at(ino);
-
-    std::vector<std::string> out;
-    for (auto &it : children) {
-      out.push_back(it.first);
-    }
-    names.swap(out);
-  }
-
-  /*
-   *
-   */
   ssize_t Write(FileHandle *fh, off_t offset, size_t size, const char *buf) {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
+    ssize_t ret = Write(in, offset, size, buf);
+    if (ret > 0)
+      fh->pos += ret;
 
-    int ret = in->set_capacity(offset + size, ba_);
-    if (ret)
-      return ret;
-
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-    in->i_st.st_ctime = now;
-    in->i_st.st_mtime = now;
-
-    const off_t orig_offset = offset;
-    const char *src = buf;
-
-    size_t left = size;
-    while (left != 0) {
-      size_t blkid = offset / BLOCK_SIZE;
-      size_t blkoff = offset % BLOCK_SIZE;
-      size_t done = std::min(left, BLOCK_SIZE-blkoff);
-
-      const std::vector<BlockAllocator::Block>& blks = in->blocks();
-      assert(blkid < blks.size());
-      const BlockAllocator::Block& b = blks[blkid];
-      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
-
-      left -= done;
-      src += done;
-      offset += done;
-    }
-
-    in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
-
-    fh->pos += size;
-
-    return size;
+    return ret;
   }
 
   /*
@@ -457,13 +490,19 @@ class Gassy {
       struct stat *st, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (name.length() >= PATH_MAX)
+    if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
+
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
 
     Inode *in = new Inode(next_ino_++);
     in->get();
@@ -483,6 +522,10 @@ class Gassy {
     in->i_st.st_birthtime = now;
 #endif
 
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
+    parent_in->i_st.st_nlink++;
+
     *st = in->i_st;
 
     children_[in->ino()] = dir_t();
@@ -495,7 +538,8 @@ class Gassy {
   /*
    *
    */
-  int Rmdir(fuse_ino_t parent_ino, const std::string& name) {
+  int Rmdir(fuse_ino_t parent_ino, const std::string& name,
+      uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
     assert(children_.find(parent_ino) != children_.end());
@@ -515,8 +559,21 @@ class Gassy {
     if (it2->second.size())
       return -ENOTEMPTY;
 
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+
+    if (parent_in->i_st.st_mode & S_ISVTX) {
+      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+        return -EPERM;
+    }
+
     children.erase(it);
     children_.erase(it2);
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    parent_in->i_st.st_mtime = now;
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_nlink--;
 
     put_inode(in->ino());
 
@@ -527,9 +584,13 @@ class Gassy {
    *
    */
   int Rename(fuse_ino_t parent_ino, const std::string& name,
-      fuse_ino_t newparent_ino, const std::string& newname)
+      fuse_ino_t newparent_ino, const std::string& newname,
+      uid_t uid, gid_t gid)
   {
     std::lock_guard<std::mutex> l(mutex_);
+
+    if (name.length() > NAME_MAX || newname.length() > NAME_MAX)
+      return -ENAMETOOLONG;
 
     // old
     assert(children_.find(parent_ino) != children_.end());
@@ -551,6 +612,66 @@ class Gassy {
       new_in = inode_get(new_it->second);
       assert(new_in);
     }
+
+    /*
+     * EACCES Write permission is denied for the directory containing oldpath or
+     * newpath,
+     *
+     * (TODO) or search permission is denied for one of the directories in the
+     * path prefix  of  old‐ path or newpath,
+     *
+     * or oldpath is a directory and does not allow write permission (needed
+     * to update the ..  entry).  (See also path_resolution(7).) TODO: this is
+     * implemented but what is the affect on ".." update?
+     */
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    assert(parent_in->i_st.st_mode & S_IFDIR);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
+    Inode *newparent_in = inode_get(newparent_ino);
+    assert(newparent_in);
+    assert(newparent_in->i_st.st_mode & S_IFDIR);
+    ret = Access(newparent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
+    if (old_in->i_st.st_mode & S_IFDIR) {
+      ret = Access(old_in, W_OK, uid, gid);
+      if (ret)
+        return ret;
+    }
+
+    /*
+    * EPERM or EACCES The  directory  containing  oldpath  has the sticky bit
+    * (S_ISVTX) set and the process's effective user ID is neither the user ID
+    * of the file to be deleted nor that of the directory containing it, and
+    * the process is not privileged (Linux: does not have the CAP_FOWNER
+    * capability);
+    *
+    * or newpath is an existing file and the directory containing it has the
+    * sticky bit set and the process's effective user ID is neither the user
+    * ID of the  file to  be  replaced  nor that of the directory containing
+    * it, and the process is not privileged (Linux: does not have the
+    * CAP_FOWNER capability);
+    *
+    * or the filesystem containing pathname does not support renaming of the
+    * type requested.
+    */
+    if (parent_in->i_st.st_mode & S_ISVTX) {
+      if (uid && uid != old_in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+        return -EPERM;
+    }
+
+    if (new_in &&
+        newparent_in->i_st.st_mode & S_ISVTX &&
+        uid && uid != new_in->i_st.st_uid &&
+        uid != newparent_in->i_st.st_uid) {
+      return -EPERM;
+    }
+
 
     if (new_in) {
       if (old_in->i_st.st_mode & S_IFDIR) {
@@ -590,34 +711,72 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    if (in->i_st.st_uid != uid)
-      return -EPERM;
-
-    if (in->i_st.st_gid != gid)
-      clear_mode |= S_ISGID;
-
     std::time_t now = std::chrono::system_clock::to_time_t(
         std::chrono::system_clock::now());
 
-    if (to_set & FUSE_SET_ATTR_MODE)
-      in->i_st.st_mode = (in->i_st.st_mode & ~07777) | (attr->st_mode & 07777);
+    if (to_set & FUSE_SET_ATTR_MODE) {
+      if (uid && in->i_st.st_uid != uid)
+        return -EPERM;
 
-    if (to_set & FUSE_SET_ATTR_UID)
-      in->i_st.st_uid = attr->st_uid;
+      if (uid && in->i_st.st_gid != gid)
+        clear_mode |= S_ISGID;
 
-    if (to_set & FUSE_SET_ATTR_GID)
-      in->i_st.st_gid = attr->st_gid;
+      in->i_st.st_mode = attr->st_mode;
+    }
 
-    if (to_set & FUSE_SET_ATTR_MTIME)
-      in->i_st.st_mtime = attr->st_mtime;
+    if (to_set & (FUSE_SET_ATTR_UID | FUSE_SET_ATTR_GID)) {
+      /*
+       * Only  a  privileged  process  (Linux: one with the CAP_CHOWN capability)
+       * may change the owner of a file.  The owner of a file may change the
+       * group of the file to any group of which that owner is a member.  A
+       * privileged process (Linux: with CAP_CHOWN) may change the group
+       * arbitrarily.
+       *
+       * TODO: group membership for owner is not enforced.
+       */
+      if (uid && (to_set & FUSE_SET_ATTR_UID) &&
+          (in->i_st.st_uid != attr->st_uid))
+        return -EPERM;
 
-    if (to_set & FUSE_SET_ATTR_ATIME)
-      in->i_st.st_atime = attr->st_atime;
+      if (uid && (to_set & FUSE_SET_ATTR_GID) &&
+          (uid != in->i_st.st_uid))
+        return -EPERM;
 
-    // FIXME: this is probably really wrong for truncate semantics, plus it
-    // would appear to not free up the extra space...
-    if (to_set & FUSE_SET_ATTR_SIZE)
-      in->i_st.st_size = attr->st_size;
+      if (to_set & FUSE_SET_ATTR_UID)
+        in->i_st.st_uid = attr->st_uid;
+
+      if (to_set & FUSE_SET_ATTR_GID)
+        in->i_st.st_gid = attr->st_gid;
+    }
+
+    if (to_set & (FUSE_SET_ATTR_MTIME | FUSE_SET_ATTR_ATIME)) {
+      if (uid && in->i_st.st_uid != uid)
+        return -EPERM;
+
+      if (to_set & FUSE_SET_ATTR_MTIME)
+        in->i_st.st_mtime = attr->st_mtime;
+
+      if (to_set & FUSE_SET_ATTR_ATIME)
+        in->i_st.st_atime = attr->st_atime;
+    }
+
+    if (to_set & FUSE_SET_ATTR_SIZE) {
+      if (uid) {
+        int ret = Access(in, W_OK, uid, gid);
+        if (ret)
+          return ret;
+      }
+
+      // impose maximum size of 2TB
+      if (attr->st_size > 2199023255552)
+        return -EFBIG;
+
+      int ret = Truncate(in, attr->st_size, uid, gid);
+      if (ret < 0)
+        return ret;
+
+      in->i_st.st_mtime = now;
+    }
 
 // FIXME: this isn't an option on Darwin?
 #if 0
@@ -637,7 +796,8 @@ class Gassy {
 
     in->i_st.st_ctime = now;
 
-    in->i_st.st_mode &= ~clear_mode;
+    if (to_set & FUSE_SET_ATTR_MODE)
+      in->i_st.st_mode &= ~clear_mode;
 
     *attr = in->i_st;
 
@@ -650,13 +810,19 @@ class Gassy {
     std::lock_guard<std::mutex> l(mutex_);
 
     // TODO: check length of link path components
-    if (name.length() >= PATH_MAX)
+    if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(parent_ino) != children_.end());
     dir_t& children = children_.at(parent_ino);
     if (children.find(name) != children.end())
       return -EEXIST;
+
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
 
     Inode *in = new Inode(next_ino_++);
     in->get();
@@ -678,6 +844,10 @@ class Gassy {
 #if 0
     in->i_st.st_birthtime = now;
 #endif
+    in->i_st.st_size = link.length();
+
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
 
     *st = in->i_st;
 
@@ -710,10 +880,18 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    stbuf->f_fsid = 98238;
-    stbuf->f_namemax = PATH_MAX;
-    stbuf->f_frsize = 4096;
-    stbuf->f_bsize = 4096;
+    uint64_t nfiles = 0;
+    for (inode_table_t::const_iterator it = ino_to_inode_.begin();
+         it != ino_to_inode_.end(); it++) {
+      if (it->second->i_st.st_mode & S_IFREG)
+        nfiles++;
+    }
+
+    stat.f_files = nfiles;
+    stat.f_bfree = ba_->avail_bytes() / 4096;
+    stat.f_bavail = ba_->avail_bytes() / 4096;
+
+    *stbuf = stat;
 
     return 0;
   }
@@ -722,7 +900,7 @@ class Gassy {
       struct stat *st, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    if (newname.length() >= PATH_MAX)
+    if (newname.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
     assert(children_.find(newparent_ino) != children_.end());
@@ -736,10 +914,22 @@ class Gassy {
     if (in->i_st.st_mode & S_IFDIR)
       return -EPERM;
 
+    Inode *newparent_in = inode_get(newparent_ino);
+    assert(newparent_in);
+
+    int ret = Access(newparent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
     in->get(); // for newname
     in->get(); // for kernel inode cache
 
     in->i_st.st_nlink++;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
+    newparent_in->i_st.st_ctime = now;
+    newparent_in->i_st.st_mtime = now;
 
     children[newname] = in->ino();
 
@@ -748,11 +938,296 @@ class Gassy {
     return 0;
   }
 
+  int Access(Inode *in, int mask, uid_t uid, gid_t gid) {
+    if (mask == F_OK)
+      return 0;
+
+    assert(mask & (R_OK | W_OK | X_OK));
+
+    if (in->i_st.st_uid == uid) {
+      if (mask & R_OK) {
+        if (!(in->i_st.st_mode & S_IRUSR))
+          return -EACCES;
+      }
+      if (mask & W_OK) {
+        if (!(in->i_st.st_mode & S_IWUSR))
+          return -EACCES;
+      }
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & S_IXUSR))
+          return -EACCES;
+      }
+      return 0;
+    } else if (in->i_st.st_gid == gid) {
+      if (mask & R_OK) {
+        if (!(in->i_st.st_mode & S_IRGRP))
+          return -EACCES;
+      }
+      if (mask & W_OK) {
+        if (!(in->i_st.st_mode & S_IWGRP))
+          return -EACCES;
+      }
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & S_IXGRP))
+          return -EACCES;
+      }
+      return 0;
+    } else if (uid == 0) {
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & (S_IXUSR | S_IXGRP | S_IXOTH)))
+          return -EACCES;
+      }
+      return 0;
+    } else {
+      if (mask & R_OK) {
+        if (!(in->i_st.st_mode & S_IROTH))
+          return -EACCES;
+      }
+      if (mask & W_OK) {
+        if (!(in->i_st.st_mode & S_IWOTH))
+          return -EACCES;
+      }
+      if (mask & X_OK) {
+        if (!(in->i_st.st_mode & S_IXOTH))
+          return -EACCES;
+      }
+      return 0;
+    }
+
+    assert(0);
+  }
+
+
+  int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid) {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    return Access(in, mask, uid, gid);
+  }
+
+  /*
+   * Allow mknod to create special files, but enforce that these files are
+   * never used in anything other than metadata operations.
+   *
+   * TODO: add checks that enforce non-use of special files. Note that this
+   * routine can also create regular files.
+   */
+  int Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+      dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    if (name.length() > NAME_MAX)
+      return -ENAMETOOLONG;
+
+    assert(children_.find(parent_ino) != children_.end());
+    dir_t& children = children_.at(parent_ino);
+    if (children.find(name) != children.end())
+      return -EEXIST;
+
+    Inode *parent_in = inode_get(parent_ino);
+    assert(parent_in);
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+
+    Inode *in = new Inode(next_ino_++);
+    in->get();
+
+    children[name] = in->ino();
+    ino_to_inode_[in->ino()] = in;
+
+    in->i_st.st_ino = in->ino();
+    in->i_st.st_mode = mode;
+    in->i_st.st_nlink = 1;
+    in->i_st.st_blksize = 4096;
+    in->i_st.st_uid = uid;
+    in->i_st.st_gid = gid;
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_atime = now;
+    in->i_st.st_mtime = now;
+    in->i_st.st_ctime = now;
+
+    parent_in->i_st.st_ctime = now;
+    parent_in->i_st.st_mtime = now;
+
+    *st = in->i_st;
+
+    return 0;
+  }
+
+  int OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid) {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    Inode *in = inode_get(ino);
+    assert(in);
+
+    if ((flags & O_ACCMODE) == O_RDONLY) {
+      int ret = Access(in, R_OK, uid, gid);
+      if (ret)
+        return ret;
+    }
+
+    return 0;
+  }
+
+  /*
+   * This is a work-in-progress. It currently is functioning, but I think that
+   * the it is not robust against concurrent modifications. The common
+   * approach it seems is to encode a cookie in the offset parameter. Current
+   * we just do an in-order traversal of the directory and return the Nth
+   * item.
+   */
+  ssize_t ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
+      size_t bufsize, off_t off)
+  {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+
+    size_t pos = 0;
+
+    /*
+     * FIXME: the ".." directory correctly shows up at the parent directory
+     * inode, but "." shows a inode number as "?" with ls -lia.
+     */
+    if (off == 0) {
+      size_t remaining = bufsize - pos;
+      memset(&st, 0, sizeof(st));
+      st.st_ino = 1;
+      size_t used = fuse_add_direntry(req, buf + pos, remaining, ".", &st, 1);
+      if (used > remaining)
+        return pos;
+      pos += used;
+      off = 1;
+    }
+
+    if (off == 1) {
+      size_t remaining = bufsize - pos;
+      memset(&st, 0, sizeof(st));
+      st.st_ino = 1;
+      size_t used = fuse_add_direntry(req, buf + pos, remaining, "..", &st, 2);
+      if (used > remaining)
+        return pos;
+      pos += used;
+      off = 2;
+    }
+
+    assert(off >= 2);
+
+    assert(children_.find(ino) != children_.end());
+    const dir_t& children = children_.at(ino);
+
+    size_t count = 0;
+    size_t target = off - 2;
+
+    for (dir_t::const_iterator it = children.begin();
+        it != children.end(); it++) {
+      if (count >= target) {
+        Inode *in = inode_get(it->second);
+        assert(in);
+        memset(&st, 0, sizeof(st));
+        st.st_ino = in->i_st.st_ino;
+        size_t remaining = bufsize - pos;
+        size_t used = fuse_add_direntry(req, buf + pos, remaining, it->first.c_str(), &st, off + 1);
+        if (used > remaining)
+          return pos;
+        pos += used;
+        off++;
+      }
+      count++;
+    }
+
+    return pos;
+  }
+
+  /*
+   *
+   */
+  void ReleaseDir(fuse_ino_t ino) {}
+
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-  typedef std::unordered_map<std::string, fuse_ino_t> dir_t;
+  typedef std::map<std::string, fuse_ino_t> dir_t;
   typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
   typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
+
+  /*
+   * must hold mutex_
+   */
+  int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid) {
+    std::cout << in->ino() << " " << newsize << std::endl;
+    int ret = Access(in, W_OK, uid, gid);
+    if (ret)
+      return ret;
+    if (in->i_st.st_size == newsize) {
+      return 0;
+    } else if (in->i_st.st_size > newsize) {
+      std::vector<BlockAllocator::Block>& blks = in->blocks();
+      size_t blkid = newsize / BLOCK_SIZE;
+      assert(blkid < blks.size());
+      for (size_t i = blks.size() - 1; i > blkid; --i) {
+        BlockAllocator::Block blk = blks.back();
+        ba_->ReturnBlock(blk);
+        blks.pop_back();
+      }
+      assert(blkid == (blks.size() - 1));
+      in->i_st.st_size = newsize;
+    } else {
+      char zeros[4096];
+      memset(zeros, 0, sizeof(zeros));
+      while (in->i_st.st_size < newsize) {
+        ssize_t ret = Write(in, in->i_st.st_size,
+            sizeof(zeros), zeros);
+        assert(ret > 0);
+      }
+      if (in->i_st.st_size > newsize)
+        return Truncate(in, newsize, uid, gid);
+      else
+        assert(in->i_st.st_size == newsize);
+    }
+
+    return 0;
+  }
+
+  /*
+   * must hold mutex_
+   */
+  ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf) {
+    int ret = in->set_capacity(offset + size, ba_);
+    if (ret)
+      return ret;
+
+    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    in->i_st.st_ctime = now;
+    in->i_st.st_mtime = now;
+
+    const off_t orig_offset = offset;
+    const char *src = buf;
+
+    size_t left = size;
+    while (left != 0) {
+      size_t blkid = offset / BLOCK_SIZE;
+      size_t blkoff = offset % BLOCK_SIZE;
+      size_t done = std::min(left, BLOCK_SIZE-blkoff);
+
+      const std::vector<BlockAllocator::Block>& blks = in->blocks();
+      assert(blkid < blks.size());
+      const BlockAllocator::Block& b = blks[blkid];
+      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+
+      left -= done;
+      src += done;
+      offset += done;
+    }
+
+    in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
+
+    return size;
+  }
 
   /*
    *
@@ -784,6 +1259,7 @@ class Gassy {
   inode_table_t ino_to_inode_;
   symlink_table_t symlinks_;
   BlockAllocator *ba_;
+  struct statvfs stat;
 };
 
 /*
@@ -815,19 +1291,34 @@ static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   FileHandle *fh = (FileHandle*)fi->fh;
 
-  delete fh;
   fs->Release(ino);
+  delete fh;
   fuse_reply_err(req, 0);
 }
 
 static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->Unlink(parent, name);
+  int ret = fs->Unlink(parent, name, ctx->uid, ctx->gid);
   fuse_reply_err(req, -ret);
 }
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
+void ll_forget_multi(fuse_req_t req, size_t count,
+    struct fuse_forget_data *forgets)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  for (size_t i = 0; i < count; i++) {
+    const struct fuse_forget_data *f = forgets + i;
+    fs->Forget(f->ino, f->nlookup);
+  }
+
+  fuse_reply_none(req);
+}
+#else
 static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
@@ -836,13 +1327,16 @@ static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
   fuse_reply_none(req);
 }
 
+#endif
+
 static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
 			     struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
   struct stat st;
 
-  int ret = fs->GetAttr(ino, &st);
+  int ret = fs->GetAttr(ino, &st, ctx->uid, ctx->gid);
   if (ret == 0)
     fuse_reply_attr(req, &st, ret);
   else
@@ -865,34 +1359,21 @@ static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
     fuse_reply_err(req, -ret);
 }
 
-struct dirbuf {
-	char *p;
-	size_t size;
-};
-
-static void dirbuf_add(fuse_req_t req, struct dirbuf *b, const char *name,
-		       fuse_ino_t ino)
+/*
+ *
+ */
+static void ll_opendir(fuse_req_t req, fuse_ino_t ino,
+			 struct fuse_file_info *fi)
 {
-	struct stat stbuf;
-	size_t oldsize = b->size;
-	b->size += fuse_add_direntry(req, NULL, 0, name, NULL, 0);
-	b->p = (char *) realloc(b->p, b->size);
-	memset(&stbuf, 0, sizeof(stbuf));
-	stbuf.st_ino = ino;
-	fuse_add_direntry(req, b->p + oldsize, b->size - oldsize, name, &stbuf,
-			  b->size);
-}
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-#define xmin(x, y) ((x) < (y) ? (x) : (y))
-
-static int reply_buf_limited(fuse_req_t req, const char *buf, size_t bufsize,
-			     off_t off, size_t maxsize)
-{
-	if (off < (off_t)bufsize)
-		return fuse_reply_buf(req, buf + off,
-				      xmin(bufsize - off, maxsize));
-	else
-		return fuse_reply_buf(req, NULL, 0);
+  int ret = fs->OpenDir(ino, fi->flags, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fuse_reply_open(req, fi);
+  } else {
+    fuse_reply_err(req, -ret);
+  }
 }
 
 /*
@@ -903,31 +1384,42 @@ static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
-  struct dirbuf b;
-  memset(&b, 0, sizeof(b));
-  dirbuf_add(req, &b, ".", 1);
-  dirbuf_add(req, &b, "..", 1);
+  char *buf = new char[size];
 
-  std::vector<std::string> names;
-  fs->PathNames(ino, names);
-
-  for (std::vector<std::string>::const_iterator it = names.begin(); it != names.end(); it++) {
-    dirbuf_add(req, &b, it->c_str(), strlen(it->c_str()));
+  ssize_t ret = fs->ReadDir(req, ino, buf, size, off);
+  if (ret >= 0) {
+    fuse_reply_buf(req, buf, (size_t)ret);
+  } else {
+    int r = (int)ret;
+    fuse_reply_err(req, -r);
   }
 
-  reply_buf_limited(req, b.p, b.size, off, size);
-  free(b.p);
+  delete [] buf;
 }
+
+/*
+ *
+ */
+static void ll_releasedir(fuse_req_t req, fuse_ino_t ino,
+			    struct fuse_file_info *fi)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  fs->ReleaseDir(ino);
+  fuse_reply_err(req, 0);
+}
+
 
 static void ll_open(fuse_req_t req, fuse_ino_t ino,
 			  struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
   FileHandle *fh;
 
   assert(!(fi->flags & O_CREAT));
 
-  int ret = fs->Open(ino, &fh);
+  int ret = fs->Open(ino, fi->flags, &fh, ctx->uid, ctx->gid);
   if (ret == 0) {
     fi->fh = (long)fh;
     fuse_reply_open(req, fi);
@@ -986,8 +1478,9 @@ static void ll_mkdir(fuse_req_t req, fuse_ino_t parent, const char *name,
 static void ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->Rmdir(parent, name);
+  int ret = fs->Rmdir(parent, name, ctx->uid, ctx->gid);
   fuse_reply_err(req, -ret);
 }
 
@@ -995,8 +1488,10 @@ static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
 			fuse_ino_t newparent, const char *newname)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->Rename(parent, name, newparent, newname);
+  int ret = fs->Rename(parent, name, newparent, newname,
+      ctx->uid, ctx->gid);
   fuse_reply_err(req, -ret);
 }
 
@@ -1087,6 +1582,32 @@ static void ll_link(fuse_req_t req, fuse_ino_t ino, fuse_ino_t newparent,
     fuse_reply_err(req, -ret);
 }
 
+static void ll_access(fuse_req_t req, fuse_ino_t ino, int mask)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  int ret = fs->Access(ino, mask, ctx->uid, ctx->gid);
+  fuse_reply_err(req, -ret);
+}
+
+static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
+    mode_t mode, dev_t rdev)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  struct fuse_entry_param fe;
+  memset(&fe, 0, sizeof(fe));
+
+  int ret = fs->Mknod(parent, name, mode, rdev, &fe.attr, ctx->uid, ctx->gid);
+  if (ret == 0) {
+    fe.ino = fe.attr.st_ino;
+    fuse_reply_entry(req, &fe);
+  } else
+    fuse_reply_err(req, -ret);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1120,14 +1641,15 @@ int main(int argc, char *argv[])
   memset(&ll_oper, 0, sizeof(ll_oper));
   ll_oper.lookup      = ll_lookup;
   ll_oper.getattr     = ll_getattr;
+  ll_oper.opendir     = ll_opendir;
   ll_oper.readdir     = ll_readdir;
+  ll_oper.releasedir  = ll_releasedir;
   ll_oper.open        = ll_open;
   ll_oper.read        = ll_read;
   ll_oper.write        = ll_write;
   ll_oper.create      = ll_create;
   ll_oper.release     = ll_release;
   ll_oper.unlink      = ll_unlink;
-  ll_oper.forget      = ll_forget;
   ll_oper.mkdir       = ll_mkdir;
   ll_oper.rmdir       = ll_rmdir;
   ll_oper.rename      = ll_rename;
@@ -1138,6 +1660,13 @@ int main(int argc, char *argv[])
   ll_oper.fsyncdir    = ll_fsyncdir;
   ll_oper.statfs      = ll_statfs;
   ll_oper.link        = ll_link;
+  ll_oper.access      = ll_access;
+  ll_oper.mknod       = ll_mknod;
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
+  ll_oper.forget_multi = ll_forget_multi;
+#else
+  ll_oper.forget      = ll_forget;
+#endif
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1170,49 +1699,15 @@ int main(int argc, char *argv[])
 }
 
 #if 0
-  // not a huge priority
 	void (*init) (void *userdata, struct fuse_conn_info *conn);
 	void (*destroy) (void *userdata);
-static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
-    mode_t mode, dev_t rdev)
-	void (*opendir) (fuse_req_t req, fuse_ino_t ino,
-			 struct fuse_file_info *fi);
-	void (*releasedir) (fuse_req_t req, fuse_ino_t ino,
-			    struct fuse_file_info *fi);
-	void (*setxattr) (fuse_req_t req, fuse_ino_t ino, const char *name,
-			  const char *value, size_t size, int flags);
-	void (*getxattr) (fuse_req_t req, fuse_ino_t ino, const char *name,
-			  size_t size);
-	void (*removexattr) (fuse_req_t req, fuse_ino_t ino, const char *name);
-	void (*listxattr) (fuse_req_t req, fuse_ino_t ino, size_t size);
-	void (*getlk) (fuse_req_t req, fuse_ino_t ino,
-		       struct fuse_file_info *fi, struct flock *lock);
-	void (*setlk) (fuse_req_t req, fuse_ino_t ino,
-		       struct fuse_file_info *fi,
-		       struct flock *lock, int sleep);
-	void (*bmap) (fuse_req_t req, fuse_ino_t ino, size_t blocksize,
-		      uint64_t idx);
 	void (*poll) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi,
 		      struct fuse_pollhandle *ph);
-	void (*flock) (fuse_req_t req, fuse_ino_t ino,
-		       struct fuse_file_info *fi, int op);
-
-  // easy and priority
-	void (*access) (fuse_req_t req, fuse_ino_t ino, int mask);
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
 		       off_t offset, off_t length, struct fuse_file_info *fi);
-
-  // harder and priority
 	void (*write_buf) (fuse_req_t req, fuse_ino_t ino,
 			   struct fuse_bufvec *bufv, off_t off,
 			   struct fuse_file_info *fi);
 	void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino,
 				off_t offset, struct fuse_bufvec *bufv);
-	void (*forget_multi) (fuse_req_t req, size_t count,
-			      struct fuse_forget_data *forgets);
-
-  // v2
-	void (*ioctl) (fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
-		       struct fuse_file_info *fi, unsigned flags,
-		       const void *in_buf, size_t in_bufsz, size_t out_bufsz);
 #endif
