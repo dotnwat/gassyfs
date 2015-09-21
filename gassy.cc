@@ -440,6 +440,51 @@ class Gassy {
   /*
    *
    */
+  ssize_t WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off) {
+    std::lock_guard<std::mutex> l(mutex_);
+
+    Inode *in = fh->in;
+
+#if 0
+    std::cout << "writebuf: size " << fuse_buf_size(bufv) << " bufcount " << bufv->count << " cur idx " <<
+      bufv->idx << " cur idx off " << bufv->off << std::endl;
+    fflush(stdout);
+#endif
+
+    size_t written = 0;
+
+    for (size_t i = bufv->idx; i < bufv->count; i++) {
+      struct fuse_buf *buf = bufv->buf + i;
+
+      assert(!(buf->flags & FUSE_BUF_IS_FD));
+      assert(!(buf->flags & FUSE_BUF_FD_RETRY));
+      assert(!(buf->flags & FUSE_BUF_FD_SEEK));
+
+      ssize_t ret;
+      if (i == bufv->idx) {
+        ret = Write(in, off, buf->size - bufv->off, (char*)buf->mem + bufv->off);
+        if (ret < 0)
+          return ret;
+        assert(buf->size > bufv->off);
+        if (ret < (ssize_t)(buf->size - bufv->off))
+          return written;
+      } else {
+        ret = Write(in, off, buf->size, (char*)buf->mem);
+        if (ret < 0)
+          return ret;
+        if (ret < (ssize_t)buf->size)
+          return written;
+      }
+      off += ret;
+      written += ret;
+    }
+
+    return written;
+  }
+
+  /*
+   *
+   */
   ssize_t Read(FileHandle *fh, off_t offset,
       size_t size, char *buf) {
     std::lock_guard<std::mutex> l(mutex_);
@@ -1427,6 +1472,21 @@ static void ll_open(fuse_req_t req, fuse_ino_t ino,
 		fuse_reply_err(req, -ret);
 }
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
+static void ll_write_buf(fuse_req_t req, fuse_ino_t ino,
+    struct fuse_bufvec *bufv, off_t off,
+    struct fuse_file_info *fi)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+  FileHandle *fh = (FileHandle*)fi->fh;
+
+  ssize_t ret = fs->WriteBuf(fh, bufv, off);
+  if (ret >= 0)
+    fuse_reply_write(req, ret);
+  else
+    fuse_reply_err(req, -ret);
+}
+#else
 static void ll_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
     size_t size, off_t off, struct fuse_file_info *fi)
 {
@@ -1439,6 +1499,7 @@ static void ll_write(fuse_req_t req, fuse_ino_t ino, const char *buf,
   else
     fuse_reply_err(req, -ret);
 }
+#endif
 
 static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
     struct fuse_file_info *fi)
@@ -1646,7 +1707,12 @@ int main(int argc, char *argv[])
   ll_oper.releasedir  = ll_releasedir;
   ll_oper.open        = ll_open;
   ll_oper.read        = ll_read;
-  ll_oper.write        = ll_write;
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
+# define USING_WRITE_BUF
+  ll_oper.write_buf   = ll_write_buf;
+#else
+  ll_oper.write       = ll_write;
+#endif
   ll_oper.create      = ll_create;
   ll_oper.release     = ll_release;
   ll_oper.unlink      = ll_unlink;
@@ -1667,6 +1733,18 @@ int main(int argc, char *argv[])
 #else
   ll_oper.forget      = ll_forget;
 #endif
+
+  /*
+   *
+   */
+  std::cout << "write interface: ";
+#ifdef USING_WRITE_BUF
+  std::cout << "write_buf";
+#else
+  std::cout << "write";
+#endif
+  std::cout << std::endl;
+  fflush(stdout); // FIXME: std::abc version?
 
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
@@ -1705,9 +1783,6 @@ int main(int argc, char *argv[])
 		      struct fuse_pollhandle *ph);
 	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
 		       off_t offset, off_t length, struct fuse_file_info *fi);
-	void (*write_buf) (fuse_req_t req, fuse_ino_t ino,
-			   struct fuse_bufvec *bufv, off_t off,
-			   struct fuse_file_info *fi);
 	void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino,
 				off_t offset, struct fuse_bufvec *bufv);
 #endif
