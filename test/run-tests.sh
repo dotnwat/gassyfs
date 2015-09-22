@@ -6,16 +6,16 @@ set -x
 #
 #
 #
+mkdir rocksdb_test
+TESTDIR=$PWD/rocksdb_test
 git clone http://github.com/facebook/rocksdb.git
 pushd rocksdb
-make -j5
-######
-# TMPD over-ride doesn't seem to work, so it will take
-# some effort to get the working directory for check to
-# be in our fuse mount.
-####### make check
+git checkout rocksdb-3.12.1
+make -j10 all
+TEST_TMPDIR=$TESTDIR make check
 popd
 rm -rf rocksdb
+rm -rf rocksdb_test
 
 #
 #
