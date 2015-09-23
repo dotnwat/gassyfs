@@ -1350,6 +1350,14 @@ static void ll_unlink(fuse_req_t req, fuse_ino_t parent, const char *name)
   fuse_reply_err(req, -ret);
 }
 
+static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
+{
+  Gassy *fs = (Gassy*)fuse_req_userdata(req);
+
+  fs->Forget(ino, nlookup);
+  fuse_reply_none(req);
+}
+
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
 void ll_forget_multi(fuse_req_t req, size_t count,
     struct fuse_forget_data *forgets)
@@ -1363,15 +1371,6 @@ void ll_forget_multi(fuse_req_t req, size_t count,
 
   fuse_reply_none(req);
 }
-#else
-static void ll_forget(fuse_req_t req, fuse_ino_t ino, long unsigned nlookup)
-{
-  Gassy *fs = (Gassy*)fuse_req_userdata(req);
-
-  fs->Forget(ino, nlookup);
-  fuse_reply_none(req);
-}
-
 #endif
 
 static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
@@ -1728,10 +1727,9 @@ int main(int argc, char *argv[])
   ll_oper.link        = ll_link;
   ll_oper.access      = ll_access;
   ll_oper.mknod       = ll_mknod;
+  ll_oper.forget      = ll_forget;
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   ll_oper.forget_multi = ll_forget_multi;
-#else
-  ll_oper.forget      = ll_forget;
 #endif
 
   /*
