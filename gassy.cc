@@ -437,6 +437,7 @@ class Gassy {
     return ret;
   }
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   /*
    *
    */
@@ -444,12 +445,6 @@ class Gassy {
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
-
-#if 0
-    std::cout << "writebuf: size " << fuse_buf_size(bufv) << " bufcount " << bufv->count << " cur idx " <<
-      bufv->idx << " cur idx off " << bufv->off << std::endl;
-    fflush(stdout);
-#endif
 
     size_t written = 0;
 
@@ -481,6 +476,7 @@ class Gassy {
 
     return written;
   }
+#endif
 
   /*
    *
