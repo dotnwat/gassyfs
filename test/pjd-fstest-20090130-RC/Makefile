@@ -10,7 +10,7 @@ CFLAGS+=-DHAS_ACL -lacl
 all:	fstest
 
 fstest:	fstest.c
-	gcc -Wall ${CFLAGS} fstest.c -o fstest
+	gcc -Wall ${CFLAGS} fstest.c -o fstest ${CFLAGS}
 
 clean:
 	rm -f fstest

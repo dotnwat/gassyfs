@@ -21,7 +21,7 @@ LIBS += $(shell pkg-config fuse --libs)
 LIBS += -lm
 
 ifneq ($(shell uname -s),Darwin)
-	LD_FLAGS	+= -lrt
+  LIBS += -lrt
 endif
 
 gassy: gassy.cc
