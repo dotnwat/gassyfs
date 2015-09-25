@@ -212,9 +212,6 @@ class Gassy {
     root->i_st.st_atime = now;
     root->i_st.st_mtime = now;
     root->i_st.st_ctime = now;
-#if 0
-    root->i_st.st_birthtime = now;
-#endif
     ino_to_inode_[root->ino()] = root;
     children_[FUSE_ROOT_ID] = dir_t();
 
@@ -275,9 +272,6 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
-#if 0
-    in->i_st.st_birthtime = now;
-#endif
 
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
@@ -559,9 +553,6 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
-#if 0
-    in->i_st.st_birthtime = now;
-#endif
 
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
@@ -819,22 +810,6 @@ class Gassy {
       in->i_st.st_mtime = now;
     }
 
-    // FIXME: this isn't an option on Darwin?
-#if 0
-    // how do these related to the non-NOW versions?
-    if (to_set & FUSE_SET_ATTR_MTIME_NOW)
-      in->i_st.st_mtime = now;
-    if (to_set & FUSE_SET_ATTR_ATIME_NOW)
-      in->i_st.st_atime = now;
-#endif
-
-    // FIXME: this isn't an option on Linux?
-#if 0
-    if (to_set & FUSE_SET_ATTR_CTIME)
-      ctime = attr->st_ctime;
-#endif
-
-
     in->i_st.st_ctime = now;
 
     if (to_set & FUSE_SET_ATTR_MODE)
@@ -882,9 +857,6 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
-#if 0
-    in->i_st.st_birthtime = now;
-#endif
     in->i_st.st_size = link.length();
 
     parent_in->i_st.st_ctime = now;
