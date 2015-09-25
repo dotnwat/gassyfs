@@ -1664,6 +1664,13 @@ static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
     fuse_reply_err(req, -ret);
 }
 
+static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
+    off_t offset, off_t length, struct fuse_file_info *fi)
+{
+  // not implemented, but return OK for now.
+  fuse_reply_err(req, 0);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1727,6 +1734,7 @@ int main(int argc, char *argv[])
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   ll_oper.forget_multi = ll_forget_multi;
 #endif
+  ll_oper.fallocate   = ll_fallocate;
 
   /*
    *
@@ -1769,14 +1777,3 @@ int main(int argc, char *argv[])
   gasnet_exit(rv);
   return rv;
 }
-
-#if 0
-	void (*init) (void *userdata, struct fuse_conn_info *conn);
-	void (*destroy) (void *userdata);
-	void (*poll) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi,
-		      struct fuse_pollhandle *ph);
-	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
-		       off_t offset, off_t length, struct fuse_file_info *fi);
-	void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino,
-				off_t offset, struct fuse_bufvec *bufv);
-#endif
