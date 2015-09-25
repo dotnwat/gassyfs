@@ -1,13 +1,6 @@
 /*
-  FUSE: Filesystem in Userspace
-  Copyright (C) 2001-2007  Miklos Szeredi <miklos@szeredi.hu>
-
-  This program can be distributed under the terms of the GNU GPL.
-  See the file COPYING.
-
-  gcc -Wall hello_ll.c `pkg-config fuse --cflags --libs` -o hello_ll
-*/
-
+ *
+ */
 #define FUSE_USE_VERSION 30
 
 #include <map>
@@ -212,9 +205,6 @@ class Gassy {
     root->i_st.st_atime = now;
     root->i_st.st_mtime = now;
     root->i_st.st_ctime = now;
-#if 0
-    root->i_st.st_birthtime = now;
-#endif
     ino_to_inode_[root->ino()] = root;
     children_[FUSE_ROOT_ID] = dir_t();
 
@@ -275,9 +265,6 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
-#if 0
-    in->i_st.st_birthtime = now;
-#endif
 
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
@@ -559,9 +546,6 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
-#if 0
-    in->i_st.st_birthtime = now;
-#endif
 
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
@@ -686,21 +670,21 @@ class Gassy {
     }
 
     /*
-    * EPERM or EACCES The  directory  containing  oldpath  has the sticky bit
-    * (S_ISVTX) set and the process's effective user ID is neither the user ID
-    * of the file to be deleted nor that of the directory containing it, and
-    * the process is not privileged (Linux: does not have the CAP_FOWNER
-    * capability);
-    *
-    * or newpath is an existing file and the directory containing it has the
-    * sticky bit set and the process's effective user ID is neither the user
-    * ID of the  file to  be  replaced  nor that of the directory containing
-    * it, and the process is not privileged (Linux: does not have the
-    * CAP_FOWNER capability);
-    *
-    * or the filesystem containing pathname does not support renaming of the
-    * type requested.
-    */
+     * EPERM or EACCES The  directory  containing  oldpath  has the sticky bit
+     * (S_ISVTX) set and the process's effective user ID is neither the user ID
+     * of the file to be deleted nor that of the directory containing it, and
+     * the process is not privileged (Linux: does not have the CAP_FOWNER
+     * capability);
+     *
+     * or newpath is an existing file and the directory containing it has the
+     * sticky bit set and the process's effective user ID is neither the user
+     * ID of the  file to  be  replaced  nor that of the directory containing
+     * it, and the process is not privileged (Linux: does not have the
+     * CAP_FOWNER capability);
+     *
+     * or the filesystem containing pathname does not support renaming of the
+     * type requested.
+     */
     if (parent_in->i_st.st_mode & S_ISVTX) {
       if (uid && uid != old_in->i_st.st_uid && uid != parent_in->i_st.st_uid)
         return -EPERM;
@@ -819,22 +803,6 @@ class Gassy {
       in->i_st.st_mtime = now;
     }
 
-// FIXME: this isn't an option on Darwin?
-#if 0
-    // how do these related to the non-NOW versions?
-    if (to_set & FUSE_SET_ATTR_MTIME_NOW)
-      in->i_st.st_mtime = now;
-    if (to_set & FUSE_SET_ATTR_ATIME_NOW)
-      in->i_st.st_atime = now;
-#endif
-
-// FIXME: this isn't an option on Linux?
-#if 0
-    if (to_set & FUSE_SET_ATTR_CTIME)
-      ctime = attr->st_ctime;
-#endif
-
-
     in->i_st.st_ctime = now;
 
     if (to_set & FUSE_SET_ATTR_MODE)
@@ -882,9 +850,6 @@ class Gassy {
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
-#if 0
-    in->i_st.st_birthtime = now;
-#endif
     in->i_st.st_size = link.length();
 
     parent_in->i_st.st_ctime = now;
@@ -923,7 +888,7 @@ class Gassy {
 
     uint64_t nfiles = 0;
     for (inode_table_t::const_iterator it = ino_to_inode_.begin();
-         it != ino_to_inode_.end(); it++) {
+        it != ino_to_inode_.end(); it++) {
       if (it->second->i_st.st_mode & S_IFREG)
         nfiles++;
     }
@@ -1307,7 +1272,7 @@ class Gassy {
  *
  */
 static void ll_create(fuse_req_t req, fuse_ino_t parent, const char *name,
-		mode_t mode, struct fuse_file_info *fi)
+    mode_t mode, struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -1370,7 +1335,7 @@ void ll_forget_multi(fuse_req_t req, size_t count,
 #endif
 
 static void ll_getattr(fuse_req_t req, fuse_ino_t ino,
-			     struct fuse_file_info *fi)
+    struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -1403,7 +1368,7 @@ static void ll_lookup(fuse_req_t req, fuse_ino_t parent, const char *name)
  *
  */
 static void ll_opendir(fuse_req_t req, fuse_ino_t ino,
-			 struct fuse_file_info *fi)
+    struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -1420,7 +1385,7 @@ static void ll_opendir(fuse_req_t req, fuse_ino_t ino,
  *
  */
 static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
-			     off_t off, struct fuse_file_info *fi)
+    off_t off, struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
@@ -1441,7 +1406,7 @@ static void ll_readdir(fuse_req_t req, fuse_ino_t ino, size_t size,
  *
  */
 static void ll_releasedir(fuse_req_t req, fuse_ino_t ino,
-			    struct fuse_file_info *fi)
+    struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
 
@@ -1451,7 +1416,7 @@ static void ll_releasedir(fuse_req_t req, fuse_ino_t ino,
 
 
 static void ll_open(fuse_req_t req, fuse_ino_t ino,
-			  struct fuse_file_info *fi)
+    struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -1464,7 +1429,7 @@ static void ll_open(fuse_req_t req, fuse_ino_t ino,
     fi->fh = (long)fh;
     fuse_reply_open(req, fi);
   } else
-		fuse_reply_err(req, -ret);
+    fuse_reply_err(req, -ret);
 }
 
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
@@ -1541,7 +1506,7 @@ static void ll_rmdir(fuse_req_t req, fuse_ino_t parent, const char *name)
 }
 
 static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
-			fuse_ino_t newparent, const char *newname)
+    fuse_ino_t newparent, const char *newname)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -1552,7 +1517,7 @@ static void ll_rename(fuse_req_t req, fuse_ino_t parent, const char *name,
 }
 
 static void ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
-			 int to_set, struct fuse_file_info *fi)
+    int to_set, struct fuse_file_info *fi)
 {
   Gassy *fs = (Gassy*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
@@ -1664,6 +1629,13 @@ static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
     fuse_reply_err(req, -ret);
 }
 
+static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
+    off_t offset, off_t length, struct fuse_file_info *fi)
+{
+  // not implemented, but return OK for now.
+  fuse_reply_err(req, 0);
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1687,10 +1659,10 @@ int main(int argc, char *argv[])
   gasnet_seginfo_t segments[gasnet_nodes()];
   GASNET_SAFE(gasnet_getSegmentInfo(segments, gasnet_nodes()));
 
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-	struct fuse_chan *ch;
-	char *mountpoint;
-	int err = -1;
+  struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+  struct fuse_chan *ch;
+  char *mountpoint;
+  int err = -1;
 
   // Operation registry
   struct fuse_lowlevel_ops ll_oper;
@@ -1727,6 +1699,7 @@ int main(int argc, char *argv[])
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   ll_oper.forget_multi = ll_forget_multi;
 #endif
+  ll_oper.fallocate   = ll_fallocate;
 
   /*
    *
@@ -1743,23 +1716,23 @@ int main(int argc, char *argv[])
   BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
   Gassy *fs = new Gassy(ba);
 
-	if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
-	    (ch = fuse_mount(mountpoint, &args)) != NULL) {
-		struct fuse_session *se;
+  if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
+      (ch = fuse_mount(mountpoint, &args)) != NULL) {
+    struct fuse_session *se;
 
-		se = fuse_lowlevel_new(&args, &ll_oper, sizeof(ll_oper), fs);
-		if (se != NULL) {
-			if (fuse_set_signal_handlers(se) != -1) {
-				fuse_session_add_chan(se, ch);
-				err = fuse_session_loop_mt(se);
-				fuse_remove_signal_handlers(se);
-				fuse_session_remove_chan(ch);
-			}
-			fuse_session_destroy(se);
-		}
-		fuse_unmount(mountpoint, ch);
-	}
-	fuse_opt_free_args(&args);
+    se = fuse_lowlevel_new(&args, &ll_oper, sizeof(ll_oper), fs);
+    if (se != NULL) {
+      if (fuse_set_signal_handlers(se) != -1) {
+        fuse_session_add_chan(se, ch);
+        err = fuse_session_loop_mt(se);
+        fuse_remove_signal_handlers(se);
+        fuse_session_remove_chan(ch);
+      }
+      fuse_session_destroy(se);
+    }
+    fuse_unmount(mountpoint, ch);
+  }
+  fuse_opt_free_args(&args);
 
 
   gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
@@ -1769,14 +1742,3 @@ int main(int argc, char *argv[])
   gasnet_exit(rv);
   return rv;
 }
-
-#if 0
-	void (*init) (void *userdata, struct fuse_conn_info *conn);
-	void (*destroy) (void *userdata);
-	void (*poll) (fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi,
-		      struct fuse_pollhandle *ph);
-	void (*fallocate) (fuse_req_t req, fuse_ino_t ino, int mode,
-		       off_t offset, off_t length, struct fuse_file_info *fi);
-	void (*retrieve_reply) (fuse_req_t req, void *cookie, fuse_ino_t ino,
-				off_t offset, struct fuse_bufvec *bufv);
-#endif
