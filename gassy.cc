@@ -9,13 +9,13 @@
 #include <deque>
 #include <vector>
 #include <iostream>
-#include <chrono>
 #include <mutex>
 #include <cstring>
 #include <cassert>
 #include <cstddef>
 
 #include <linux/limits.h>
+#include <time.h>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
 #ifdef STORE_GASNET
@@ -23,6 +23,14 @@
 #endif
 
 #include "common.h"
+
+static std::time_t time_now()
+{
+  struct timespec ts;
+  int ret = clock_gettime(CLOCK_REALTIME, &ts);
+  assert(ret == 0);
+  return ts.tv_sec;
+}
 
 /*
  * Block Allocation
@@ -239,7 +247,7 @@ class Gassy {
     DirInode *root = new DirInode(FUSE_ROOT_ID);
     root->i_st.st_mode = S_IFDIR | 0755;
     root->i_st.st_nlink = 2;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     root->i_st.st_atime = now;
     root->i_st.st_mtime = now;
     root->i_st.st_ctime = now;
@@ -296,7 +304,7 @@ class Gassy {
     in->i_st.st_blksize = 4096;
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
@@ -349,7 +357,7 @@ class Gassy {
         return -EPERM;
     }
 
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_ctime = now;
 
     parent_in->i_st.st_ctime = now;
@@ -415,7 +423,7 @@ class Gassy {
       ret = Truncate(in, 0, uid, gid);
       if (ret)
         return ret;
-      std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+      std::time_t now = time_now();
       in->i_st.st_mtime = now;
       in->i_st.st_ctime = now;
     }
@@ -503,7 +511,7 @@ class Gassy {
 
     Inode *in = fh->in;
 
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_atime = now;
 
     // reading past eof returns nothing
@@ -575,7 +583,7 @@ class Gassy {
     in->i_st.st_nlink = 2;
     in->i_st.st_blksize = 4096;
     in->i_st.st_blocks = 1;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
@@ -619,7 +627,7 @@ class Gassy {
 
     children.erase(it);
 
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     parent_in->i_st.st_mtime = now;
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_nlink--;
@@ -736,7 +744,7 @@ class Gassy {
       put_inode(new_in->ino());
     }
 
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     old_in->i_st.st_ctime = now;
 
     newparent_children[newname] = old_it->second;
@@ -754,8 +762,7 @@ class Gassy {
     Inode *in = inode_get(ino);
     assert(in);
 
-    std::time_t now = std::chrono::system_clock::to_time_t(
-        std::chrono::system_clock::now());
+    std::time_t now = time_now();
 
     if (to_set & FUSE_SET_ATTR_MODE) {
       if (uid && in->i_st.st_uid != uid)
@@ -862,7 +869,7 @@ class Gassy {
     in->i_st.st_blksize = 4096;
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
@@ -945,7 +952,7 @@ class Gassy {
 
     in->i_st.st_nlink++;
 
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_ctime = now;
     newparent_in->i_st.st_ctime = now;
     newparent_in->i_st.st_mtime = now;
@@ -1063,7 +1070,7 @@ class Gassy {
     in->i_st.st_blksize = 4096;
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_atime = now;
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
@@ -1217,7 +1224,7 @@ class Gassy {
     if (ret)
       return ret;
 
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_ctime = now;
     in->i_st.st_mtime = now;
 
