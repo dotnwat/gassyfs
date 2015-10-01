@@ -193,13 +193,18 @@ class Inode {
 
   struct stat i_st;
 
-  typedef std::map<std::string, fuse_ino_t> dir_t;
-  dir_t dentries;
 
  private:
   fuse_ino_t ino_;
   long int ref_;
   std::vector<BlockAllocator::Block> blks_;
+};
+
+class DirInode : public Inode {
+ public:
+  typedef std::map<std::string, fuse_ino_t> dir_t;
+  explicit DirInode(fuse_ino_t ino) : Inode(ino) {}
+  dir_t dentries;
 };
 
 /*
@@ -223,7 +228,7 @@ class Gassy {
     next_ino_(FUSE_ROOT_ID + 1), ba_(ba), local_(local)
   {
     // setup root inode
-    Inode *root = new Inode(FUSE_ROOT_ID);
+    DirInode *root = new DirInode(FUSE_ROOT_ID);
     root->i_st.st_mode = S_IFDIR | 0755;
     root->i_st.st_nlink = 2;
     std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
@@ -255,11 +260,8 @@ class Gassy {
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& children = parent_in->dentries;
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t& children = parent_in->dentries;
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -321,11 +323,8 @@ class Gassy {
   int Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t::const_iterator it = parent_in->dentries.find(name);
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
     if (it == parent_in->dentries.end())
       return -ENOENT;
 
@@ -366,11 +365,8 @@ class Gassy {
     std::lock_guard<std::mutex> l(mutex_);
 
     // FIXME: should this be -ENOTDIR or -ENOENT in some cases?
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-
-    Inode::dir_t::const_iterator it = parent_in->dentries.find(name);
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
     if (it == parent_in->dentries.end())
       return -ENOENT;
 
@@ -549,11 +545,8 @@ class Gassy {
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& children = parent_in->dentries;
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t& children = parent_in->dentries;
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -561,7 +554,7 @@ class Gassy {
     if (ret)
       return ret;
 
-    Inode *in = new Inode(next_ino_++);
+    DirInode *in = new DirInode(next_ino_++);
     in->get();
 
     in->i_st.st_uid = uid;
@@ -595,17 +588,14 @@ class Gassy {
       uid_t uid, gid_t gid) {
     std::lock_guard<std::mutex> l(mutex_);
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& children = parent_in->dentries;
-    Inode::dir_t::const_iterator it = children.find(name);
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t& children = parent_in->dentries;
+    DirInode::dir_t::const_iterator it = children.find(name);
     if (it == children.end())
       return -ENOENT;
 
-    Inode *in = inode_get(it->second);
-    if (!(in->i_st.st_mode & S_IFDIR))
+    DirInode *in = __dir_inode_get(it->second);
+    if (!in)
       return -ENOTDIR;
 
     if (in->dentries.size())
@@ -641,12 +631,9 @@ class Gassy {
       return -ENAMETOOLONG;
 
     // old
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& parent_children = parent_in->dentries;
-    Inode::dir_t::const_iterator old_it = parent_children.find(name);
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t& parent_children = parent_in->dentries;
+    DirInode::dir_t::const_iterator old_it = parent_children.find(name);
     if (old_it == parent_children.end())
       return -ENOENT;
 
@@ -654,12 +641,9 @@ class Gassy {
     assert(old_in);
 
     // new
-    Inode *newparent_in = inode_get(newparent_ino);
-    assert(newparent_in);
-
-    assert(newparent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& newparent_children = newparent_in->dentries;
-    Inode::dir_t::const_iterator new_it = newparent_children.find(newname);
+    DirInode *newparent_in = dir_inode_get(newparent_ino);
+    DirInode::dir_t& newparent_children = newparent_in->dentries;
+    DirInode::dir_t::const_iterator new_it = newparent_children.find(newname);
 
     Inode *new_in = NULL;
     if (new_it != newparent_children.end()) {
@@ -724,7 +708,8 @@ class Gassy {
     if (new_in) {
       if (old_in->i_st.st_mode & S_IFDIR) {
         if (new_in->i_st.st_mode & S_IFDIR) {
-          Inode::dir_t& new_children = new_in->dentries;
+          DirInode *new_dir_in = reinterpret_cast<DirInode*>(new_in);
+          DirInode::dir_t& new_children = new_dir_in->dentries;
           if (new_children.size())
             return -ENOTEMPTY;
         } else
@@ -844,11 +829,8 @@ class Gassy {
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& children = parent_in->dentries;
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t& children = parent_in->dentries;
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -932,11 +914,8 @@ class Gassy {
     if (newname.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    Inode *newparent_in = inode_get(newparent_ino);
-    assert(newparent_in);
-
-    assert(newparent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& children = newparent_in->dentries;
+    DirInode *newparent_in = dir_inode_get(newparent_ino);
+    DirInode::dir_t& children = newparent_in->dentries;
     if (children.find(newname) != children.end())
       return -EEXIST;
 
@@ -1051,11 +1030,8 @@ class Gassy {
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    Inode *parent_in = inode_get(parent_ino);
-    assert(parent_in);
-
-    assert(parent_in->i_st.st_mode & S_IFDIR);
-    Inode::dir_t& children = parent_in->dentries;
+    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode::dir_t& children = parent_in->dentries;
     if (children.find(name) != children.end())
       return -EEXIST;
 
@@ -1063,6 +1039,7 @@ class Gassy {
     if (ret)
       return ret;
 
+    // FIXME: assert this is only used for specific types of inodes
     Inode *in = new Inode(next_ino_++);
     in->get();
 
@@ -1148,15 +1125,13 @@ class Gassy {
 
     assert(off >= 2);
 
-    Inode *dir_in = inode_get(ino);
-    assert(dir_in);
-    assert(dir_in->i_st.st_mode & S_IFDIR);
-    const Inode::dir_t& children = dir_in->dentries;
+    DirInode *dir_in = dir_inode_get(ino);
+    const DirInode::dir_t& children = dir_in->dentries;
 
     size_t count = 0;
     size_t target = off - 2;
 
-    for (Inode::dir_t::const_iterator it = children.begin();
+    for (DirInode::dir_t::const_iterator it = children.begin();
         it != children.end(); it++) {
       if (count >= target) {
         Inode *in = inode_get(it->second);
@@ -1270,6 +1245,21 @@ class Gassy {
     if (it == ino_to_inode_.end())
       return NULL;
     return it->second;
+  }
+
+  DirInode *__dir_inode_get(fuse_ino_t ino) const {
+    Inode *in = inode_get(ino);
+    assert(in);
+    if (!(in->i_st.st_mode & S_IFDIR))
+      return NULL;
+    return reinterpret_cast<DirInode*>(in);
+  }
+
+  DirInode *dir_inode_get(fuse_ino_t ino) const {
+    Inode *in = inode_get(ino);
+    assert(in);
+    assert(in->i_st.st_mode & S_IFDIR);
+    return reinterpret_cast<DirInode*>(in);
   }
 
   /*
