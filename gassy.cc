@@ -223,6 +223,12 @@ class DirInode : public Inode {
   dir_t dentries;
 };
 
+class SymlinkInode : public Inode {
+ public:
+  explicit SymlinkInode(fuse_ino_t ino) : Inode(ino) {}
+  std::string link;
+};
+
 /*
  *
  */
@@ -364,8 +370,6 @@ class Gassy {
     parent_in->i_st.st_mtime = now;
 
     in->i_st.st_nlink--;
-
-    symlinks_.erase(it->second);
 
     parent_in->dentries.erase(it);
 
@@ -738,7 +742,6 @@ class Gassy {
           return -EISDIR;
       }
 
-      symlinks_.erase(new_it->second);
       newparent_children.erase(new_it);
 
       put_inode(new_in->ino());
@@ -856,12 +859,13 @@ class Gassy {
     if (ret)
       return ret;
 
-    Inode *in = new Inode(next_ino_++);
+    SymlinkInode *in = new SymlinkInode(next_ino_++);
     in->get();
 
     children[name] = in->ino();
     ino_to_inode_[in->ino()] = in;
-    symlinks_[in->ino()] = link;
+
+    in->link = link;
 
     in->i_st.st_ino = in->ino();
     in->i_st.st_mode = S_IFLNK;
@@ -883,24 +887,19 @@ class Gassy {
     return 0;
   }
 
-  int Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
+  ssize_t Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
   {
     std::lock_guard<std::mutex> l(mutex_);
 
-    Inode *in = inode_get(ino);
-    assert(in);
-    assert(in->i_st.st_mode & S_IFLNK);
-
-    assert(symlinks_.find(ino) != symlinks_.end());
-    const std::string& link = symlinks_.at(ino);
-    size_t link_len = link.size();
+    SymlinkInode *in = symlink_inode_get(ino);
+    size_t link_len = in->link.size();
 
     if (link_len > maxlen)
       return -ENAMETOOLONG;
 
-    std::strncpy(path, link.c_str(), maxlen);
+    in->link.copy(path, link_len, 0);
 
-    return (int)link_len;
+    return link_len;
   }
 
   int Statfs(fuse_ino_t ino, struct statvfs *stbuf) {
@@ -1176,7 +1175,6 @@ class Gassy {
 
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-  typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
 
   /*
    * must hold mutex_
@@ -1283,6 +1281,13 @@ class Gassy {
     return reinterpret_cast<DirInode*>(in);
   }
 
+  SymlinkInode *symlink_inode_get(fuse_ino_t ino) const {
+    Inode *in = inode_get(ino);
+    assert(in);
+    assert(in->i_st.st_mode & S_IFLNK);
+    return reinterpret_cast<SymlinkInode*>(in);
+  }
+
   /*
    *
    */
@@ -1300,7 +1305,6 @@ class Gassy {
   fuse_ino_t next_ino_;
   std::mutex mutex_;
   inode_table_t ino_to_inode_;
-  symlink_table_t symlinks_;
   BlockAllocator *ba_;
   struct statvfs stat;
 };
@@ -1572,12 +1576,14 @@ static void ll_readlink(fuse_req_t req, fuse_ino_t ino)
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   char path[PATH_MAX + 1];
 
-  int ret = fs->Readlink(ino, path, sizeof(path) - 1, ctx->uid, ctx->gid);
+  ssize_t ret = fs->Readlink(ino, path, sizeof(path) - 1, ctx->uid, ctx->gid);
   if (ret >= 0) {
     path[ret] = '\0';
     fuse_reply_readlink(req, path);
-  } else
-    fuse_reply_err(req, -ret);
+  } else {
+    int r = (int)ret;
+    fuse_reply_err(req, -r);
+  }
 }
 
 static void ll_symlink(fuse_req_t req, const char *link, fuse_ino_t parent,
