@@ -34,9 +34,11 @@ class BlockAllocator {
     gasnet_node_t node;
     size_t addr;
     size_t size;
+    char *data;
   };
 
-  BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments)
+  BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments) :
+    local_(false)
   {
     total_bytes_ = 0;
     // FIXME: we don't really fill up the global address space at this point,
@@ -52,6 +54,20 @@ class BlockAllocator {
     }
     curr_node = 0;
     num_nodes = nsegments;
+    avail_bytes_ = total_bytes_;
+  }
+
+  explicit BlockAllocator(size_t size) :
+    local_(true)
+  {
+    Node n;
+    n.addr = 0;
+    n.size = size;
+    n.curr = n.addr;
+    nodes_.push_back(n);
+    total_bytes_ = n.size;
+    curr_node = 0;
+    num_nodes = 1;
     avail_bytes_ = total_bytes_;
   }
 
@@ -73,6 +89,7 @@ class BlockAllocator {
     bb.node = curr_node;
     bb.addr = n.curr;
     bb.size = BLOCK_SIZE;
+    bb.data = NULL;
 
     n.curr += BLOCK_SIZE;
     if (n.curr >= (n.addr + n.size))
@@ -80,6 +97,9 @@ class BlockAllocator {
 
     // next node to allocate from
     curr_node = (curr_node + 1) % num_nodes;
+
+    if (local_)
+      bb.data = new char[BLOCK_SIZE];
 
     *bp = bb;
     avail_bytes_ -= BLOCK_SIZE;
@@ -115,6 +135,8 @@ class BlockAllocator {
 
   uint64_t total_bytes_;
   uint64_t avail_bytes_;
+
+  bool local_;
 
   std::mutex mutex_;
 };
@@ -194,8 +216,8 @@ struct FileHandle {
  */
 class Gassy {
  public:
-  explicit Gassy(BlockAllocator *ba) :
-    next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
+  Gassy(BlockAllocator *ba, bool local) :
+    next_ino_(FUSE_ROOT_ID + 1), ba_(ba), local_(local)
   {
     // setup root inode
     Inode *root = new Inode(FUSE_ROOT_ID);
@@ -499,7 +521,10 @@ class Gassy {
       const std::vector<BlockAllocator::Block>& blks = in->blocks();
       assert(blkid < blks.size());
       const BlockAllocator::Block& b = blks[blkid];
-      gasnet_get_bulk(dest, b.node, (void*)(b.addr + blkoff), done);
+      if (local_)
+        memcpy(dest, b.data + blkoff, done);
+      else
+        gasnet_get_bulk(dest, b.node, (void*)(b.addr + blkoff), done);
 
       dest += done;
       offset += done;
@@ -1223,7 +1248,10 @@ class Gassy {
       const std::vector<BlockAllocator::Block>& blks = in->blocks();
       assert(blkid < blks.size());
       const BlockAllocator::Block& b = blks[blkid];
-      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+      if (local_)
+        memcpy(b.data + blkoff, src, done);
+      else
+        gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
 
       left -= done;
       src += done;
@@ -1266,6 +1294,7 @@ class Gassy {
   symlink_table_t symlinks_;
   BlockAllocator *ba_;
   struct statvfs stat;
+  bool local_;
 };
 
 /*
@@ -1636,6 +1665,41 @@ static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
   fuse_reply_err(req, 0);
 }
 
+struct gassyfs_param {
+  bool local;
+  size_t local_size_mb;
+};
+
+enum {
+  KEY_GASSYFS_OPT,
+  KEY_USE_LOCAL_RAM,
+};
+
+static struct fuse_opt gassyfs_opts[] = {
+  FUSE_OPT_KEY("local", KEY_USE_LOCAL_RAM),
+  {"local_size_mb=%lu", offsetof(struct gassyfs_param, local_size_mb), KEY_GASSYFS_OPT},
+  FUSE_OPT_END
+};
+
+static int gassyfs_opt_proc(void *data, const char *arg, int key,
+    struct fuse_args *outargs)
+{
+  struct gassyfs_param *p = (struct gassyfs_param *)data;
+
+  switch (key) {
+    case FUSE_OPT_KEY_OPT:
+      return 1;
+    case FUSE_OPT_KEY_NONOPT:
+      return 1;
+    case KEY_USE_LOCAL_RAM:
+      p->local = true;
+      return 0;
+    default:
+      return 0;
+  }
+
+}
+
 int main(int argc, char *argv[])
 {
   GASNET_SAFE(gasnet_init(&argc, &argv));
@@ -1663,6 +1727,22 @@ int main(int argc, char *argv[])
   struct fuse_chan *ch;
   char *mountpoint;
   int err = -1;
+
+  struct gassyfs_param params;
+  params.local = false;
+  params.local_size_mb = 1024;
+
+  if (fuse_opt_parse(&args, &params, gassyfs_opts, gassyfs_opt_proc) == -1) {
+    fprintf(stderr, "failed to parse options\n");
+    exit(1);
+  }
+
+  std::cout << "backend: ";
+  if (params.local)
+    std::cout << "local memory: (" << params.local_size_mb << " MB)";
+  else
+    std::cout << "gasnet";
+  std::cout << std::endl;
 
   // Operation registry
   struct fuse_lowlevel_ops ll_oper;
@@ -1713,8 +1793,13 @@ int main(int argc, char *argv[])
   std::cout << std::endl;
   fflush(stdout); // FIXME: std::abc version?
 
-  BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
-  Gassy *fs = new Gassy(ba);
+  BlockAllocator *ba;
+  if (params.local)
+    ba = new BlockAllocator(params.local_size_mb << 20);
+  else
+    ba = new BlockAllocator(segments, gasnet_nodes());
+
+  Gassy *fs = new Gassy(ba, params.local);
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {
