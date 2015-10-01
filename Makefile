@@ -6,14 +6,14 @@ endif
 CXX=g++ -g
 
 CXXFLAGS += -Wall -std=c++11 -Wno-deprecated-register
-CPPFLAGS += -DGASNET_PAR=1
-CPPFLAGS += -I$(GASNET)/include
-LDFLAGS += -L$(GASNET)/lib
+
+GASNET_CPPFLAGS += -DGASNET_PAR=1 -I$(GASNET)/include
+GASNET_LDFLAGS  += -L$(GASNET)/lib
 
 CONDUIT ?= udp
 ifeq ($(strip $(CONDUIT)),udp)
-  CPPFLAGS += -I$(GASNET)/include/udp-conduit
-  LIBS     += -lgasnet-udp-par -lamudp
+  GASNET_CPPFLAGS += -I$(GASNET)/include/udp-conduit
+  GASNET_LIBS     += -lgasnet-udp-par -lamudp
 endif
 
 CPPFLAGS += $(shell pkg-config fuse --cflags)
@@ -24,5 +24,10 @@ ifneq ($(shell uname -s),Darwin)
   LIBS += -lrt
 endif
 
-gassy: gassy.cc
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+all: gassy-gn gassy-mem
+
+gassy-gn: gassy.cc
+	$(CXX) -DSTORE_GASNET $(CXXFLAGS) $(CPPFLAGS) $(GASNET_CPPFLAGS) $(LDFLAGS) $(GASNET_LDFLAGS) -o $@ $< $(LIBS) $(GASNET_LIBS)
+
+gassy-mem: gassy.cc
+	$(CXX) -DSTORE_LOCAL $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)

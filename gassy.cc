@@ -13,10 +13,14 @@
 #include <mutex>
 #include <cstring>
 #include <cassert>
+#include <cstddef>
 
+#include <linux/limits.h>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
+#ifdef STORE_GASNET
 #include <gasnet.h>
+#endif
 
 #include "common.h"
 
@@ -31,12 +35,13 @@
 class BlockAllocator {
  public:
   struct Block {
-    gasnet_node_t node;
+    unsigned node;
     size_t addr;
     size_t size;
     char *data;
   };
 
+#ifdef STORE_GASNET
   BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments) :
     local_(false)
   {
@@ -56,7 +61,7 @@ class BlockAllocator {
     num_nodes = nsegments;
     avail_bytes_ = total_bytes_;
   }
-
+#elif defined(STORE_LOCAL)
   explicit BlockAllocator(size_t size) :
     local_(true)
   {
@@ -70,6 +75,9 @@ class BlockAllocator {
     num_nodes = 1;
     avail_bytes_ = total_bytes_;
   }
+#else
+#error
+#endif
 
   int GetBlock(Block *bp) {
     std::lock_guard<std::mutex> l(mutex_);
@@ -224,8 +232,8 @@ struct FileHandle {
  */
 class Gassy {
  public:
-  Gassy(BlockAllocator *ba, bool local) :
-    next_ino_(FUSE_ROOT_ID + 1), ba_(ba), local_(local)
+  Gassy(BlockAllocator *ba) :
+    next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
   {
     // setup root inode
     DirInode *root = new DirInode(FUSE_ROOT_ID);
@@ -520,10 +528,13 @@ class Gassy {
       const std::vector<BlockAllocator::Block>& blks = in->blocks();
       assert(blkid < blks.size());
       const BlockAllocator::Block& b = blks[blkid];
-      if (local_)
+#ifdef STORE_LOCAL
         memcpy(dest, b.data + blkoff, done);
-      else
+#elif defined(STORE_GASNET)
         gasnet_get_bulk(dest, b.node, (void*)(b.addr + blkoff), done);
+#else
+#error
+#endif
 
       dest += done;
       offset += done;
@@ -1222,10 +1233,13 @@ class Gassy {
       const std::vector<BlockAllocator::Block>& blks = in->blocks();
       assert(blkid < blks.size());
       const BlockAllocator::Block& b = blks[blkid];
-      if (local_)
-        memcpy(b.data + blkoff, src, done);
-      else
-        gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+#ifdef STORE_LOCAL
+      memcpy(b.data + blkoff, src, done);
+#elif defined(STORE_GASNET)
+      gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+#else
+#error
+#endif
 
       left -= done;
       src += done;
@@ -1282,7 +1296,6 @@ class Gassy {
   symlink_table_t symlinks_;
   BlockAllocator *ba_;
   struct statvfs stat;
-  bool local_;
 };
 
 /*
@@ -1690,6 +1703,7 @@ static int gassyfs_opt_proc(void *data, const char *arg, int key,
 
 int main(int argc, char *argv[])
 {
+#ifdef STORE_GASNET
   GASNET_SAFE(gasnet_init(&argc, &argv));
 
   size_t segsz = gasnet_getMaxLocalSegmentSize();
@@ -1710,6 +1724,7 @@ int main(int argc, char *argv[])
 
   gasnet_seginfo_t segments[gasnet_nodes()];
   GASNET_SAFE(gasnet_getSegmentInfo(segments, gasnet_nodes()));
+#endif
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   struct fuse_chan *ch;
@@ -1724,6 +1739,14 @@ int main(int argc, char *argv[])
     fprintf(stderr, "failed to parse options\n");
     exit(1);
   }
+
+#ifdef STORE_GASNET
+  params.local = false;
+#elif defined(STORE_LOCAL)
+  params.local = true;
+#else
+#error
+#endif
 
   std::cout << "backend: ";
   if (params.local)
@@ -1782,12 +1805,15 @@ int main(int argc, char *argv[])
   fflush(stdout); // FIXME: std::abc version?
 
   BlockAllocator *ba;
-  if (params.local)
-    ba = new BlockAllocator(params.local_size_mb << 20);
-  else
-    ba = new BlockAllocator(segments, gasnet_nodes());
+#ifdef STORE_LOCAL
+  ba = new BlockAllocator(params.local_size_mb << 20);
+#elif defined(STORE_GASNET)
+  ba = new BlockAllocator(segments, gasnet_nodes());
+#else
+#error
+#endif
 
-  Gassy *fs = new Gassy(ba, params.local);
+  Gassy *fs = new Gassy(ba);
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {
@@ -1807,11 +1833,14 @@ int main(int argc, char *argv[])
   }
   fuse_opt_free_args(&args);
 
-
+#ifdef STORE_GASNET
   gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
   gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
+#endif
 
   int rv = err ? 1 : 0;
+#ifdef STORE_GASNET
   gasnet_exit(rv);
+#endif
   return rv;
 }
