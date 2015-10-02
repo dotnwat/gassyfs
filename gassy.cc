@@ -218,7 +218,7 @@ class Inode {
 
 class DirInode : public Inode {
  public:
-  typedef std::map<std::string, fuse_ino_t> dir_t;
+  typedef std::map<std::string, Inode*> dir_t;
   explicit DirInode(fuse_ino_t ino) : Inode(ino) {}
   dir_t dentries;
 };
@@ -301,7 +301,7 @@ class Gassy {
     Inode *in = new Inode(next_ino_++);
     in->get();
 
-    children[name] = in->ino();
+    children[name] = in;
     ino_to_inode_[in->ino()] = in;
 
     in->i_st.st_ino = in->ino();
@@ -354,7 +354,7 @@ class Gassy {
     if (ret)
       return ret;
 
-    Inode *in = inode_get(it->second);
+    Inode *in = it->second;
     assert(in);
     assert(!(in->i_st.st_mode & S_IFDIR));
 
@@ -390,7 +390,7 @@ class Gassy {
     if (it == parent_in->dentries.end())
       return -ENOENT;
 
-    Inode *in = inode_get(it->second);
+    Inode *in = it->second;
     assert(in);
     in->get();
 
@@ -598,7 +598,7 @@ class Gassy {
 
     *st = in->i_st;
 
-    children[name] = in->ino();
+    children[name] = in;
     ino_to_inode_[in->ino()] = in;
 
     return 0;
@@ -617,9 +617,10 @@ class Gassy {
     if (it == children.end())
       return -ENOENT;
 
-    DirInode *in = __dir_inode_get(it->second);
-    if (!in)
+    if (!is_directory(it->second))
       return -ENOTDIR;
+
+    DirInode *in = reinterpret_cast<DirInode*>(it->second);
 
     if (in->dentries.size())
       return -ENOTEMPTY;
@@ -660,7 +661,7 @@ class Gassy {
     if (old_it == parent_children.end())
       return -ENOENT;
 
-    Inode *old_in = inode_get(old_it->second);
+    Inode *old_in = old_it->second;
     assert(old_in);
 
     // new
@@ -670,7 +671,7 @@ class Gassy {
 
     Inode *new_in = NULL;
     if (new_it != newparent_children.end()) {
-      new_in = inode_get(new_it->second);
+      new_in = new_it->second;
       assert(new_in);
     }
 
@@ -862,7 +863,7 @@ class Gassy {
     SymlinkInode *in = new SymlinkInode(next_ino_++);
     in->get();
 
-    children[name] = in->ino();
+    children[name] = in;
     ino_to_inode_[in->ino()] = in;
 
     in->link = link;
@@ -956,7 +957,7 @@ class Gassy {
     newparent_in->i_st.st_ctime = now;
     newparent_in->i_st.st_mtime = now;
 
-    children[newname] = in->ino();
+    children[newname] = in;
 
     *st = in->i_st;
 
@@ -1060,7 +1061,7 @@ class Gassy {
     Inode *in = new Inode(next_ino_++);
     in->get();
 
-    children[name] = in->ino();
+    children[name] = in;
     ino_to_inode_[in->ino()] = in;
 
     in->i_st.st_ino = in->ino();
@@ -1151,7 +1152,7 @@ class Gassy {
     for (DirInode::dir_t::const_iterator it = children.begin();
         it != children.end(); it++) {
       if (count >= target) {
-        Inode *in = inode_get(it->second);
+        Inode *in = it->second;
         assert(in);
         memset(&st, 0, sizeof(st));
         st.st_ino = in->i_st.st_ino;
@@ -1254,6 +1255,10 @@ class Gassy {
     in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
 
     return size;
+  }
+
+  bool is_directory(const Inode *in) const {
+    return in->i_st.st_mode & S_IFDIR;
   }
 
   /*
