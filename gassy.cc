@@ -13,6 +13,7 @@
 #include <cstring>
 #include <cassert>
 #include <cstddef>
+#include <atomic>
 
 #include <linux/limits.h>
 #include <time.h>
@@ -162,6 +163,8 @@ class BlockAllocator {
  */
 class Inode {
  public:
+  Inode() : ino_(0), ref_(1) {}
+
   explicit Inode(fuse_ino_t ino) :
     ino_(ino), ref_(1)
   {
@@ -203,6 +206,10 @@ class Inode {
     return ino_;
   }
 
+  void set_ino(fuse_ino_t ino) {
+    ino_ = ino;
+  }
+
   std::vector<BlockAllocator::Block>& blocks() {
     return blks_;
   }
@@ -230,11 +237,14 @@ class SymlinkInode : public Inode {
 };
 
 /*
- *
+ * FIXME: where are FileHandle instances freed?
  */
 struct FileHandle {
   Inode *in;
   off_t pos;
+
+  FileHandle() : in(NULL), pos(0)
+  {}
 
   FileHandle(Inode *in) :
     in(in), pos(0)
@@ -277,19 +287,9 @@ class Gassy {
    */
   int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
 
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
-
-    DirInode *parent_in = dir_inode_get(parent_ino);
-    DirInode::dir_t& children = parent_in->dentries;
-    if (children.find(name) != children.end())
-      return -EEXIST;
-
-    int ret = Access(parent_in, W_OK, uid, gid);
-    if (ret)
-      return ret;
 
     /*
      * One reference for the name and one for the kernel inode cache. This
@@ -298,13 +298,9 @@ class Gassy {
      * need one here. The scenario that is of interest is removing a file that
      * is open.
      */
-    Inode *in = new Inode(next_ino_++);
+    Inode *in = new Inode;
     in->get();
 
-    children[name] = in;
-    ino_to_inode_[in->ino()] = in;
-
-    in->i_st.st_ino = in->ino();
     in->i_st.st_mode = S_IFREG | mode;
     in->i_st.st_nlink = 1;
     in->i_st.st_blksize = 4096;
@@ -315,13 +311,42 @@ class Gassy {
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
 
+    FileHandle *fh = new FileHandle(in);
+
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
+
+    DirInode::dir_t& children = parent_in->dentries;
+    if (children.find(name) != children.end()) {
+      parent_in->unlock();
+      delete in; // FIXME: use shared_ptr
+      delete fh;
+      return -EEXIST;
+    }
+
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret) {
+      parent_in->unlock();
+      delete in;
+      delete fh;
+      return ret;
+    }
+
+    in->set_ino(next_ino_++);
+    in->i_st.st_ino = in->ino();
+
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
 
-    *st = in->i_st;
+    children[name] = in;
 
-    FileHandle *fh = new FileHandle(in);
+    add_inode(in);
+
+    *st = in->i_st;
     *fhp = fh;
+
+    parent_in->unlock();
 
     return 0;
   }
@@ -330,12 +355,11 @@ class Gassy {
    *
    */
   int GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    Inode *in = inode_get(ino);
+    Inode *in;
+    get_inode_locked(ino, &in);
     assert(in);
     *st = in->i_st;
-
+    in->unlock();
     return 0;
   }
 
@@ -343,24 +367,35 @@ class Gassy {
    *
    */
   int Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
 
-    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
+
     DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
-    if (it == parent_in->dentries.end())
+    if (it == parent_in->dentries.end()) {
+      parent_in->unlock();
       return -ENOENT;
+    }
 
     int ret = Access(parent_in, W_OK, uid, gid);
-    if (ret)
+    if (ret) {
+      parent_in->unlock();
       return ret;
+    }
 
     Inode *in = it->second;
-    assert(in);
+    in->lock();
+
+    // rmdir is used for directories
     assert(!(in->i_st.st_mode & S_IFDIR));
 
     if (parent_in->i_st.st_mode & S_ISVTX) {
-      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid) {
+        in->unlock();
+        parent_in->unlock();
         return -EPERM;
+      }
     }
 
     std::time_t now = time_now();
@@ -375,6 +410,9 @@ class Gassy {
 
     put_inode(in->ino());
 
+    in->unlock();
+    parent_in->unlock();
+
     return 0;
   }
 
@@ -382,19 +420,27 @@ class Gassy {
    *
    */
   int Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat *st) {
-    std::lock_guard<std::mutex> l(mutex_);
+
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
 
     // FIXME: should this be -ENOTDIR or -ENOENT in some cases?
-    DirInode *parent_in = dir_inode_get(parent_ino);
     DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
-    if (it == parent_in->dentries.end())
+    if (it == parent_in->dentries.end()) {
+      parent_in->unlock();
       return -ENOENT;
+    }
 
     Inode *in = it->second;
-    assert(in);
+    in->lock();
+
     in->get();
 
     *st = in->i_st;
+
+    in->unlock();
+    parent_in->unlock();
 
     return 0;
   }
@@ -403,10 +449,14 @@ class Gassy {
    *
    */
   int Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
 
-    Inode *in = inode_get(ino);
+    FileHandle *fh = new FileHandle;
+
+    Inode *in;
+    get_inode_locked(ino, &in);
     assert(in);
+
+    fh->in = in;
 
     int mode = 0;
     if ((flags & O_ACCMODE) == O_RDONLY)
@@ -416,24 +466,34 @@ class Gassy {
     else if ((flags & O_ACCMODE) == O_RDWR)
       mode = R_OK | W_OK;
 
-    if (!(mode & W_OK) && (flags & O_TRUNC))
+    if (!(mode & W_OK) && (flags & O_TRUNC)) {
+      in->unlock();
+      delete fh;
       return -EACCES;
+    }
 
     int ret = Access(in, mode, uid, gid);
-    if (ret)
+    if (ret) {
+      in->unlock();
+      delete fh;
       return ret;
+    }
 
     if (flags & O_TRUNC) {
       ret = Truncate(in, 0, uid, gid);
-      if (ret)
+      if (ret) {
+        in->unlock();
+        delete fh;
         return ret;
+      }
       std::time_t now = time_now();
       in->i_st.st_mtime = now;
       in->i_st.st_ctime = now;
     }
 
-    FileHandle *fh = new FileHandle(in);
     *fhp = fh;
+
+    in->unlock();
 
     return 0;
   }
@@ -447,6 +507,7 @@ class Gassy {
    *
    */
   void Forget(fuse_ino_t ino, long unsigned nlookup) {
+    fixme
     std::lock_guard<std::mutex> l(mutex_);
     put_inode(ino, nlookup);
   }
@@ -455,6 +516,7 @@ class Gassy {
    *
    */
   ssize_t Write(FileHandle *fh, off_t offset, size_t size, const char *buf) {
+    fixme
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
@@ -470,6 +532,7 @@ class Gassy {
    *
    */
   ssize_t WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off) {
+    fixme
     std::lock_guard<std::mutex> l(mutex_);
 
     Inode *in = fh->in;
@@ -510,6 +573,7 @@ class Gassy {
    *
    */
   ssize_t Read(FileHandle *fh, off_t offset,
+    fixme
       size_t size, char *buf) {
     std::lock_guard<std::mutex> l(mutex_);
 
@@ -563,26 +627,15 @@ class Gassy {
    */
   int Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       struct stat *st, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
 
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    DirInode *parent_in = dir_inode_get(parent_ino);
-    DirInode::dir_t& children = parent_in->dentries;
-    if (children.find(name) != children.end())
-      return -EEXIST;
-
-    int ret = Access(parent_in, W_OK, uid, gid);
-    if (ret)
-      return ret;
-
-    DirInode *in = new DirInode(next_ino_++);
+    DirInode *in = new DirInode;
     in->get();
 
     in->i_st.st_uid = uid;
     in->i_st.st_gid = gid;
-    in->i_st.st_ino = in->ino();
     in->i_st.st_mode = S_IFDIR | mode;
     in->i_st.st_nlink = 2;
     in->i_st.st_blksize = 4096;
@@ -592,14 +645,37 @@ class Gassy {
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
 
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
+
+    DirInode::dir_t& children = parent_in->dentries;
+    if (children.find(name) != children.end()) {
+      parent_in->unlock();
+      delete in;
+      return -EEXIST;
+    }
+
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret) {
+      parent_in->unlock();
+      delete in;
+      return ret;
+    }
+
+    in->set_ino(next_ino_++);
+    in->i_st.st_ino = in->ino();
+
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
     parent_in->i_st.st_nlink++;
 
+    children[name] = in;
+    add_inode(in);
+
     *st = in->i_st;
 
-    children[name] = in;
-    ino_to_inode_[in->ino()] = in;
+    parent_in->unlock();
 
     return 0;
   }
@@ -609,25 +685,41 @@ class Gassy {
    */
   int Rmdir(fuse_ino_t parent_ino, const std::string& name,
       uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
 
-    DirInode *parent_in = dir_inode_get(parent_ino);
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
+
     DirInode::dir_t& children = parent_in->dentries;
     DirInode::dir_t::const_iterator it = children.find(name);
-    if (it == children.end())
+    if (it == children.end()) {
+      parent_in->unlock();
       return -ENOENT;
+    }
 
-    if (!is_directory(it->second))
+    Inode *in = it->second;
+    in->lock();
+
+    if (!is_directory(in)) {
+      in->unlock();
+      parent_in->unlock();
       return -ENOTDIR;
+    }
 
-    DirInode *in = reinterpret_cast<DirInode*>(it->second);
+    DirInode *dir_in = reinterpret_cast<DirInode*>(in);
 
-    if (in->dentries.size())
+    if (dir_in->dentries.size()) {
+      in->unlock();
+      parent_in->unlock();
       return -ENOTEMPTY;
+    }
 
     if (parent_in->i_st.st_mode & S_ISVTX) {
-      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+      if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid) {
+        in->unlock();
+        parent_in->unlock();
         return -EPERM;
+      }
     }
 
     children.erase(it);
@@ -637,7 +729,10 @@ class Gassy {
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_nlink--;
 
-    put_inode(in->ino());
+    put_inode(in->ino()); fixme locking
+
+    in->unlock();
+    parent_in->unlock();
 
     return 0;
   }
@@ -1179,6 +1274,8 @@ class Gassy {
 
   /*
    * must hold mutex_
+   *
+   * FIXME: holding in->lock from Open
    */
   int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid) {
     std::cout << in->ino() << " " << newsize << std::endl;
@@ -1293,6 +1390,52 @@ class Gassy {
     return reinterpret_cast<SymlinkInode*>(in);
   }
 
+  void add_inode(Inode *in) {
+    lock.lock();
+    assert(ino_to_ino_.find(in->ino()) == ino_to_ino_.end());
+    ino_to_inode_[in->ino()] = in;
+    lock.unlock();
+  }
+
+  void get_inode_locked(fuse_ino_t ino, DirInode **inp) {
+    lock.lock_shared();
+
+    inode_table_t::const_iterator it = ino_to_inode_.find(ino);
+    if (it == ino_to_inode_.end()) {
+      *inp = NULL;
+      lock.unlock_shared();
+      return;
+    }
+
+    Inode *in = it->second;
+    lock.unlock_shared();
+
+    in->lock();
+    assert(in->i_st.st_mode & S_IFDIR);
+
+    /*
+     * The idea here is that unlink might race with other operations,
+     * and we can check while holding the inode lock if this is the case.
+     * This could be avoided by using dentries that all point to the inode,
+     * which could probably be a good idea anyway (TODO: what state is a
+     * dentry vs in an inode?).
+     *
+     * FIXME: as it stands this doesn't exactly work for links because the
+     * flag below can't express multiple directory entries. Instead, switch to
+     * using n_link.
+     *
+     * It is still a very weird race that I'm not sure in which way it is
+     * handled. What I'm going to do is assume this is handled in the vfs some
+     * how. I will just assert here that we never return a reference to an
+     * inode that has been unlinked. This doesn't apply to open file handles
+     * that have raced with unlink, but in those cases there is no inode
+     * lookup, just a raw pointer. This is only for new lookups
+     */
+    assert(!in->unlinked);
+
+    *inp = reinterpret_cast<DirInode*>(in);
+  }
+
   /*
    *
    */
@@ -1307,8 +1450,7 @@ class Gassy {
     }
   }
 
-  fuse_ino_t next_ino_;
-  std::mutex mutex_;
+  std::atomic_uint next_ino_;
   inode_table_t ino_to_inode_;
   BlockAllocator *ba_;
   struct statvfs stat;
