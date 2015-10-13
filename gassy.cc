@@ -744,6 +744,7 @@ class Gassy {
       fuse_ino_t newparent_ino, const std::string& newname,
       uid_t uid, gid_t gid)
   {
+    fixme
     std::lock_guard<std::mutex> l(mutex_);
 
     if (name.length() > NAME_MAX || newname.length() > NAME_MAX)
@@ -855,6 +856,7 @@ class Gassy {
   int SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
       uid_t uid, gid_t gid)
   {
+    fixme
     std::lock_guard<std::mutex> l(mutex_);
     mode_t clear_mode = 0;
 
@@ -940,30 +942,13 @@ class Gassy {
   int Symlink(const std::string& link, fuse_ino_t parent_ino,
       const std::string& name, struct stat *st, uid_t uid, gid_t gid)
   {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    // TODO: check length of link path components
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    DirInode *parent_in = dir_inode_get(parent_ino);
-    DirInode::dir_t& children = parent_in->dentries;
-    if (children.find(name) != children.end())
-      return -EEXIST;
-
-    int ret = Access(parent_in, W_OK, uid, gid);
-    if (ret)
-      return ret;
-
-    SymlinkInode *in = new SymlinkInode(next_ino_++);
+    SymlinkInode *in = new SymlinkInode;
     in->get();
 
-    children[name] = in;
-    ino_to_inode_[in->ino()] = in;
-
     in->link = link;
-
-    in->i_st.st_ino = in->ino();
     in->i_st.st_mode = S_IFLNK;
     in->i_st.st_nlink = 1;
     in->i_st.st_blksize = 4096;
@@ -975,35 +960,71 @@ class Gassy {
     in->i_st.st_ctime = now;
     in->i_st.st_size = link.length();
 
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
+
+    DirInode::dir_t& children = parent_in->dentries;
+    if (children.find(name) != children.end()) {
+      parent_in->unlock();
+      delete in;
+      return -EEXIST;
+    }
+
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret) {
+      parent_in->unlock();
+      delete in;
+      return ret;
+    }
+
+    in->set_ino(next_ino_++);
+    in->i_st.st_ino = in->ino();
+
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
 
+    children[name] = in;
+    add_inode(in);
+
     *st = in->i_st;
+
+    parent_in->unlock();
 
     return 0;
   }
 
   ssize_t Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
   {
-    std::lock_guard<std::mutex> l(mutex_);
+    SymlinkInode *in;
+    get_inode_locked(ino, &in);
+    assert(in);
 
-    SymlinkInode *in = symlink_inode_get(ino);
     size_t link_len = in->link.size();
 
-    if (link_len > maxlen)
+    if (link_len > maxlen) {
+      in->unlock();
       return -ENAMETOOLONG;
+    }
 
     in->link.copy(path, link_len, 0);
+
+    in->unlock();
 
     return link_len;
   }
 
-  int Statfs(fuse_ino_t ino, struct statvfs *stbuf) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    Inode *in = inode_get(ino);
+  int Statfs(fuse_ino_t ino, struct statvfs *stbuf)
+  {
+    Inode *in;
+    inode_get_locked(ino, &in);
     assert(in);
 
+    lock.lock();
+
+    /*
+     * FIXME: uhhhh
+     */
     uint64_t nfiles = 0;
     for (inode_table_t::const_iterator it = ino_to_inode_.begin();
         it != ino_to_inode_.end(); it++) {
@@ -1017,48 +1038,69 @@ class Gassy {
 
     *stbuf = stat;
 
+    lock.unlock();
+
+    in->unlock();
+
     return 0;
   }
 
   int Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& newname,
-      struct stat *st, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
-
+      struct stat *st, uid_t uid, gid_t gid)
+  {
     if (newname.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    DirInode *newparent_in = dir_inode_get(newparent_ino);
+    DirInode *newparent_in;
+    inode_get_locked(newparent_ino, &newparent_in);
+    assert(newparent_in);
+
     DirInode::dir_t& children = newparent_in->dentries;
-    if (children.find(newname) != children.end())
+    if (children.find(newname) != children.end()) {
+      newparent_in->unlock();
       return -EEXIST;
+    }
 
-    Inode *in = inode_get(ino);
-    assert(in);
+    Inode *tgt_in;
+    inode_get_locked(ino, &tgt_in);
+    assert(tgt_in);
 
-    if (in->i_st.st_mode & S_IFDIR)
+    if (tgt_in->i_st.st_mode & S_IFDIR) {
+      tgt_in->unlock();
+      newparent_in->unlock();
       return -EPERM;
+    }
 
     int ret = Access(newparent_in, W_OK, uid, gid);
-    if (ret)
+    if (ret) {
+      tgt_in->unlock();
+      newparent_in->unlock();
       return ret;
+    }
 
-    in->get(); // for newname
-    in->get(); // for kernel inode cache
+    tgt_in->get(); // for newname
+    tgt_in->get(); // for kernel inode cache
 
-    in->i_st.st_nlink++;
+    tgt_in->i_st.st_nlink++;
 
     std::time_t now = time_now();
-    in->i_st.st_ctime = now;
+    tgt_in->i_st.st_ctime = now;
     newparent_in->i_st.st_ctime = now;
     newparent_in->i_st.st_mtime = now;
 
-    children[newname] = in;
+    children[newname] = tgt_in;
 
-    *st = in->i_st;
+    *st = tgt_in->i_st;
+
+    tgt_in->unlock();
+    newparent_in->unlock();
 
     return 0;
   }
 
+  /*
+   * assert(in->locked())
+   */
   int Access(Inode *in, int mask, uid_t uid, gid_t gid) {
     if (mask == F_OK)
       return 0;
@@ -1120,12 +1162,15 @@ class Gassy {
 
 
   int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    Inode *in = inode_get(ino);
+    Inode *in;
+    get_inode_locked(ino, &in);
     assert(in);
 
-    return Access(in, mask, uid, gid);
+    int ret = Access(in, mask, uid, gid);
+
+    in->unlock();
+
+    return ret;
   }
 
   /*
@@ -1138,28 +1183,13 @@ class Gassy {
   int Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
   {
-    std::lock_guard<std::mutex> l(mutex_);
-
     if (name.length() > NAME_MAX)
       return -ENAMETOOLONG;
 
-    DirInode *parent_in = dir_inode_get(parent_ino);
-    DirInode::dir_t& children = parent_in->dentries;
-    if (children.find(name) != children.end())
-      return -EEXIST;
-
-    int ret = Access(parent_in, W_OK, uid, gid);
-    if (ret)
-      return ret;
-
     // FIXME: assert this is only used for specific types of inodes
-    Inode *in = new Inode(next_ino_++);
+    Inode *in = new Inode;
     in->get();
 
-    children[name] = in;
-    ino_to_inode_[in->ino()] = in;
-
-    in->i_st.st_ino = in->ino();
     in->i_st.st_mode = mode;
     in->i_st.st_nlink = 1;
     in->i_st.st_blksize = 4096;
@@ -1170,25 +1200,55 @@ class Gassy {
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
 
+    DirInode *parent_in;
+    get_inode_locked(parent_ino, &parent_in);
+    assert(parent_in);
+
+    DirInode::dir_t& children = parent_in->dentries;
+    if (children.find(name) != children.end()) {
+      parent_in->unlock();
+      delete in;
+      return -EEXIST;
+    }
+
+    int ret = Access(parent_in, W_OK, uid, gid);
+    if (ret) {
+      parent_in->unlock();
+      delete in;
+      return ret;
+    }
+
+    in->set_ino(next_ino_++);
+    in->i_st.st_ino = in->ino();
+
     parent_in->i_st.st_ctime = now;
     parent_in->i_st.st_mtime = now;
 
+    children[name] = in;
+    add_inode(in);
+
     *st = in->i_st;
+
+    parent_in->unlock();
 
     return 0;
   }
 
-  int OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid) {
-    std::lock_guard<std::mutex> l(mutex_);
-
-    Inode *in = inode_get(ino);
+  int OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid)
+  {
+    Inode *in;
+    get_inode_locked(ino, &in);
     assert(in);
 
     if ((flags & O_ACCMODE) == O_RDONLY) {
       int ret = Access(in, R_OK, uid, gid);
-      if (ret)
+      if (ret) {
+        in->unlock();
         return ret;
+      }
     }
+
+    in->unlock();
 
     return 0;
   }
@@ -1203,6 +1263,7 @@ class Gassy {
   ssize_t ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
       size_t bufsize, off_t off)
   {
+    fixme
     std::lock_guard<std::mutex> l(mutex_);
 
     struct stat st;
