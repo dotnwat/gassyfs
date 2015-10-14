@@ -1,6 +1,8 @@
-
+TARGETS = gassy-mem
 ifndef GASNET
-  $(error GASNET variable is not defined, aborting build)
+  $(info GASNET variable is not defined, aborting build)
+else
+  TARGETS += gassy-gn
 endif
 
 CXX=g++ -g
@@ -24,7 +26,7 @@ ifneq ($(shell uname -s),Darwin)
   LIBS += -lrt
 endif
 
-all: gassy-gn gassy-mem
+all: $(TARGETS)
 
 gassy-gn: gassy.cc
 	$(CXX) -DSTORE_GASNET $(CXXFLAGS) $(CPPFLAGS) $(GASNET_CPPFLAGS) $(LDFLAGS) $(GASNET_LDFLAGS) -o $@ $< $(LIBS) $(GASNET_LIBS)
