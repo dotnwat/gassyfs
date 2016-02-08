@@ -3,8 +3,20 @@
 #include <cstring>
 #include <string>
 #include <iostream>
+#include <time.h>
 #include "inode.h"
 #include "block_allocator.h"
+
+/*
+ *
+ */
+static inline std::time_t time_now(void)
+{
+  struct timespec ts;
+  int ret = clock_gettime(CLOCK_REALTIME, &ts);
+  assert(ret == 0);
+  return ts.tv_sec;
+}
 
 GassyFs::GassyFs(BlockAllocator *ba) :
   next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
@@ -13,7 +25,7 @@ GassyFs::GassyFs(BlockAllocator *ba) :
   Inode *root = new Inode(FUSE_ROOT_ID);
   root->i_st.st_mode = S_IFDIR | 0755;
   root->i_st.st_nlink = 2;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   root->i_st.st_atime = now;
   root->i_st.st_mtime = now;
   root->i_st.st_ctime = now;
@@ -71,7 +83,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -123,7 +135,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
       return -EPERM;
   }
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_ctime = now;
 
   parent_in->i_st.st_ctime = now;
@@ -186,7 +198,7 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
     ret = Truncate(in, 0, uid, gid);
     if (ret)
       return ret;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
   }
@@ -266,7 +278,7 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
 
   Inode *in = fh->in;
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
 
   // reading past eof returns nothing
@@ -333,7 +345,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_nlink = 2;
   in->i_st.st_blksize = 4096;
   in->i_st.st_blocks = 1;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -378,7 +390,7 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
 
   children.erase(it);
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   parent_in->i_st.st_mtime = now;
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_nlink--;
@@ -496,7 +508,7 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
     put_inode(new_in->ino());
   }
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   old_in->i_st.st_ctime = now;
 
   newparent_children[newname] = old_it->second;
@@ -514,8 +526,7 @@ int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
   Inode *in = inode_get(ino);
   assert(in);
 
-  std::time_t now = std::chrono::system_clock::to_time_t(
-      std::chrono::system_clock::now());
+  std::time_t now = time_now();
 
   if (to_set & FUSE_SET_ATTR_MODE) {
     if (uid && in->i_st.st_uid != uid)
@@ -626,7 +637,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -713,7 +724,7 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
 
   in->i_st.st_nlink++;
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_ctime = now;
   newparent_in->i_st.st_ctime = now;
   newparent_in->i_st.st_mtime = now;
@@ -835,7 +846,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -990,7 +1001,7 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
   if (ret)
     return ret;
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_ctime = now;
   in->i_st.st_mtime = now;
 
