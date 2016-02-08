@@ -81,6 +81,7 @@ class GassyFs {
 
   Inode *inode_get(fuse_ino_t ino) const;
   DirInode *inode_get_dir(fuse_ino_t ino) const;
+  SymlinkInode *inode_get_symlink(fuse_ino_t ino) const;
 
   void put_inode(fuse_ino_t ino, long unsigned dec = 1);
 

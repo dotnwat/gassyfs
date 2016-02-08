@@ -598,7 +598,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   if (ret)
     return ret;
 
-  Inode *in = new Inode(next_ino_++);
+  SymlinkInode *in = new SymlinkInode(next_ino_++);
   in->get();
 
   children[name] = in;
@@ -630,8 +630,7 @@ ssize_t GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, 
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
-  assert(in->i_st.st_mode & S_IFLNK);
+  SymlinkInode *in = inode_get_symlink(ino);
 
   size_t link_len = in->link.size();
 
@@ -1007,6 +1006,13 @@ DirInode *GassyFs::inode_get_dir(fuse_ino_t ino) const
   Inode *in = inode_get(ino);
   assert(in->is_directory());
   return static_cast<DirInode*>(in);
+}
+
+SymlinkInode *GassyFs::inode_get_symlink(fuse_ino_t ino) const
+{
+  Inode *in = inode_get(ino);
+  assert(in->is_symlink());
+  return static_cast<SymlinkInode*>(in);
 }
 
 /*
