@@ -26,13 +26,19 @@ class Inode {
 
   struct stat i_st;
 
-  typedef std::map<std::string, Inode*> dir_t;
-  dir_t dentries;
-
   std::string link;
+
+  bool is_directory() const;
 
  private:
   fuse_ino_t ino_;
   long int ref_;
   std::vector<Block> blks_;
+};
+
+class DirInode : public Inode {
+ public:
+  typedef std::map<std::string, Inode*> dir_t;
+  explicit DirInode(fuse_ino_t ino) : Inode(ino) {}
+  dir_t dentries;
 };

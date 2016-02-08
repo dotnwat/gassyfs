@@ -80,6 +80,7 @@ class GassyFs {
   ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf);
 
   Inode *inode_get(fuse_ino_t ino) const;
+  DirInode *inode_get_dir(fuse_ino_t ino) const;
 
   void put_inode(fuse_ino_t ino, long unsigned dec = 1);
 

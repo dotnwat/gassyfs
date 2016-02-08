@@ -25,6 +25,7 @@ struct Block {
 };
 
 class Inode;
+class DirInode;
 struct FileHandle {
   Inode *in;
   off_t pos;

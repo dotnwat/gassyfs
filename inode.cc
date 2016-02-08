@@ -54,3 +54,8 @@ std::vector<Block>& Inode::blocks()
 {
   return blks_;
 }
+
+bool Inode::is_directory() const
+{
+  return i_st.st_mode & S_IFDIR;
+}
