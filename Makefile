@@ -24,5 +24,12 @@ ifneq ($(shell uname -s),Darwin)
   LIBS += -lrt
 endif
 
-gassy: gassy.cc
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(LIBS)
+CPPFLAGS += -DFUSE_USE_VERSION=30
+
+OBJS = inode.o block_allocator.o gassy_fs.o
+
+%.o: %.cc %.h
+	$(CXX) $(CPPFLAGS) -c -o $@ $<
+
+gassy: gassy.cc $(OBJS)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(OBJS) $(LIBS)

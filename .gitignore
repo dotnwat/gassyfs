@@ -1,2 +1,4 @@
 gassy
+*.o
+*.dSYM
 test/pjd-fstest-20090130-RC/fstest

@@ -1,5 +1,6 @@
 #ifndef COMMON_H
 #define COMMON_H
+#include <gasnet.h>
 
 #define GASNET_SAFE(fncall) do {                                     \
     int _retval;                                                     \
@@ -14,5 +15,23 @@
       exit(_retval);                                                 \
     }                                                                \
   } while(0)
+
+#define BLOCK_SIZE 4096
+
+struct Block {
+  gasnet_node_t node;
+  size_t addr;
+  size_t size;
+};
+
+class Inode;
+struct FileHandle {
+  Inode *in;
+  off_t pos;
+
+  FileHandle(Inode *in) :
+    in(in), pos(0)
+  {}
+};
 
 #endif
