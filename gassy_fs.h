@@ -74,8 +74,6 @@ class GassyFs {
 
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-  typedef std::map<std::string, fuse_ino_t> dir_t;
-  typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
   typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
 
   int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid);
@@ -88,7 +86,6 @@ class GassyFs {
 
   fuse_ino_t next_ino_;
   std::mutex mutex_;
-  dir_table_t children_;
   inode_table_t ino_to_inode_;
   symlink_table_t symlinks_;
   BlockAllocator *ba_;

@@ -1,3 +1,4 @@
+#include <map>
 #include <vector>
 
 #include <fuse.h>
@@ -24,6 +25,9 @@ class Inode {
   std::vector<Block>& blocks();
 
   struct stat i_st;
+
+  typedef std::map<std::string, fuse_ino_t> dir_t;
+  dir_t dentries;
 
  private:
   fuse_ino_t ino_;
