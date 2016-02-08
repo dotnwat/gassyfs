@@ -1,5 +1,6 @@
 #include "gassy_fs.h"
 #include <cassert>
+#include <cstring>
 #include <string>
 #include <iostream>
 #include "inode.h"
