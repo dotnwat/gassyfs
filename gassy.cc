@@ -290,12 +290,14 @@ static void ll_readlink(fuse_req_t req, fuse_ino_t ino)
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
   char path[PATH_MAX + 1];
 
-  int ret = fs->Readlink(ino, path, sizeof(path) - 1, ctx->uid, ctx->gid);
+  ssize_t ret = fs->Readlink(ino, path, sizeof(path) - 1, ctx->uid, ctx->gid);
   if (ret >= 0) {
     path[ret] = '\0';
     fuse_reply_readlink(req, path);
-  } else
-    fuse_reply_err(req, -ret);
+  } else {
+    int r = (int)ret;
+    fuse_reply_err(req, -r);
+  }
 }
 
 static void ll_symlink(fuse_req_t req, const char *link, fuse_ino_t parent,

@@ -131,7 +131,6 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
 
   in->i_st.st_nlink--;
 
-  symlinks_.erase(it->second);
   parent_in->dentries.erase(it);
 
   put_inode(in->ino());
@@ -492,7 +491,6 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
         return -EISDIR;
     }
 
-    symlinks_.erase(new_it->second);
     newparent_children.erase(new_it);
 
     put_inode(new_in->ino());
@@ -619,7 +617,8 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
 
   children[name] = in->ino();
   ino_to_inode_[in->ino()] = in;
-  symlinks_[in->ino()] = link;
+
+  in->link = link;
 
   in->i_st.st_ino = in->ino();
   in->i_st.st_mode = S_IFLNK;
@@ -641,7 +640,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   return 0;
 }
 
-int GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
+ssize_t GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -649,16 +648,14 @@ int GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_
   assert(in);
   assert(in->i_st.st_mode & S_IFLNK);
 
-  assert(symlinks_.find(ino) != symlinks_.end());
-  const std::string& link = symlinks_.at(ino);
-  size_t link_len = link.size();
+  size_t link_len = in->link.size();
 
   if (link_len > maxlen)
     return -ENAMETOOLONG;
 
-  std::strncpy(path, link.c_str(), maxlen);
+  in->link.copy(path, link_len, 0);
 
-  return (int)link_len;
+  return link_len;
 }
 
 int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)

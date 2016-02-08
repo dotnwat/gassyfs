@@ -29,6 +29,8 @@ class Inode {
   typedef std::map<std::string, fuse_ino_t> dir_t;
   dir_t dentries;
 
+  std::string link;
+
  private:
   fuse_ino_t ino_;
   long int ref_;
