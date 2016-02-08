@@ -33,3 +33,6 @@ OBJS = inode.o block_allocator.o gassy_fs.o
 
 gassy: gassy.cc $(OBJS)
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(OBJS) $(LIBS)
+
+clean:
+	rm -f $(OBJS) gassy

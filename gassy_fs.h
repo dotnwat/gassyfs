@@ -51,7 +51,7 @@ class GassyFs {
   int Symlink(const std::string& link, fuse_ino_t parent_ino,
       const std::string& name, struct stat *st, uid_t uid, gid_t gid);
 
-  int Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid);
+  ssize_t Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid);
 
   int Statfs(fuse_ino_t ino, struct statvfs *stbuf);
 
@@ -74,23 +74,20 @@ class GassyFs {
 
  private:
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-  typedef std::map<std::string, fuse_ino_t> dir_t;
-  typedef std::unordered_map<fuse_ino_t, dir_t> dir_table_t;
-  typedef std::unordered_map<fuse_ino_t, std::string> symlink_table_t;
 
   int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid);
 
   ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf);
 
   Inode *inode_get(fuse_ino_t ino) const;
+  DirInode *inode_get_dir(fuse_ino_t ino) const;
+  SymlinkInode *inode_get_symlink(fuse_ino_t ino) const;
 
   void put_inode(fuse_ino_t ino, long unsigned dec = 1);
 
   fuse_ino_t next_ino_;
   std::mutex mutex_;
-  dir_table_t children_;
   inode_table_t ino_to_inode_;
-  symlink_table_t symlinks_;
   BlockAllocator *ba_;
   struct statvfs stat;
 };

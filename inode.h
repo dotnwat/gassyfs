@@ -1,3 +1,4 @@
+#include <map>
 #include <vector>
 
 #include <fuse.h>
@@ -25,8 +26,24 @@ class Inode {
 
   struct stat i_st;
 
+  bool is_directory() const;
+  bool is_symlink() const;
+
  private:
   fuse_ino_t ino_;
   long int ref_;
   std::vector<Block> blks_;
+};
+
+class DirInode : public Inode {
+ public:
+  typedef std::map<std::string, Inode*> dir_t;
+  explicit DirInode(fuse_ino_t ino) : Inode(ino) {}
+  dir_t dentries;
+};
+
+class SymlinkInode : public Inode {
+ public:
+  explicit SymlinkInode(fuse_ino_t ino) : Inode(ino) {}
+  std::string link;
 };

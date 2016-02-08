@@ -3,22 +3,33 @@
 #include <cstring>
 #include <string>
 #include <iostream>
+#include <time.h>
 #include "inode.h"
 #include "block_allocator.h"
+
+/*
+ *
+ */
+static inline std::time_t time_now(void)
+{
+  struct timespec ts;
+  int ret = clock_gettime(CLOCK_REALTIME, &ts);
+  assert(ret == 0);
+  return ts.tv_sec;
+}
 
 GassyFs::GassyFs(BlockAllocator *ba) :
   next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
 {
   // setup root inode
-  Inode *root = new Inode(FUSE_ROOT_ID);
+  DirInode *root = new DirInode(FUSE_ROOT_ID);
   root->i_st.st_mode = S_IFDIR | 0755;
   root->i_st.st_nlink = 2;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   root->i_st.st_atime = now;
   root->i_st.st_mtime = now;
   root->i_st.st_ctime = now;
   ino_to_inode_[root->ino()] = root;
-  children_[FUSE_ROOT_ID] = dir_t();
 
   memset(&stat, 0, sizeof(stat));
   stat.f_fsid = 983983;
@@ -41,13 +52,11 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& children = children_.at(parent_ino);
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
 
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
   int ret = Access(parent_in, W_OK, uid, gid);
   if (ret)
     return ret;
@@ -62,7 +71,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   Inode *in = new Inode(next_ino_++);
   in->get();
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   in->i_st.st_ino = in->ino();
@@ -71,7 +80,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -92,7 +101,6 @@ int GassyFs::GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid)
   std::lock_guard<std::mutex> l(mutex_);
 
   Inode *in = inode_get(ino);
-  assert(in);
   *st = in->i_st;
 
   return 0;
@@ -102,20 +110,16 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& children = children_.at(parent_ino);
-  dir_t::const_iterator it = children.find(name);
-  if (it == children.end())
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
+  if (it == parent_in->dentries.end())
     return -ENOENT;
-
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
 
   int ret = Access(parent_in, W_OK, uid, gid);
   if (ret)
     return ret;
 
-  Inode *in = inode_get(it->second);
+  Inode *in = it->second;
   assert(in);
   assert(!(in->i_st.st_mode & S_IFDIR));
 
@@ -124,7 +128,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
       return -EPERM;
   }
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_ctime = now;
 
   parent_in->i_st.st_ctime = now;
@@ -132,8 +136,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
 
   in->i_st.st_nlink--;
 
-  symlinks_.erase(it->second);
-  children.erase(it);
+  parent_in->dentries.erase(it);
 
   put_inode(in->ino());
 
@@ -144,16 +147,13 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat 
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  // FIXME: should this be -ENOTDIR?
-  dir_table_t::const_iterator it = children_.find(parent_ino);
-  if (it == children_.end())
+  // FIXME: should this be -ENOTDIR or -ENOENT in some cases?
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
+  if (it == parent_in->dentries.end())
     return -ENOENT;
 
-  dir_t::const_iterator it2 = it->second.find(name);
-  if (it2 == it->second.end())
-    return -ENOENT;
-
-  Inode *in = inode_get(it2->second);
+  Inode *in = it->second;
   assert(in);
   in->get();
 
@@ -167,7 +167,6 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
   std::lock_guard<std::mutex> l(mutex_);
 
   Inode *in = inode_get(ino);
-  assert(in);
 
   int mode = 0;
   if ((flags & O_ACCMODE) == O_RDONLY)
@@ -188,7 +187,7 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
     ret = Truncate(in, 0, uid, gid);
     if (ret)
       return ret;
-    std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+    std::time_t now = time_now();
     in->i_st.st_mtime = now;
     in->i_st.st_ctime = now;
   }
@@ -268,7 +267,7 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
 
   Inode *in = fh->in;
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
 
   // reading past eof returns nothing
@@ -313,18 +312,16 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& children = children_.at(parent_ino);
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
 
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
   int ret = Access(parent_in, W_OK, uid, gid);
   if (ret)
     return ret;
 
-  Inode *in = new Inode(next_ino_++);
+  DirInode *in = new DirInode(next_ino_++);
   in->get();
 
   in->i_st.st_uid = uid;
@@ -334,7 +331,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_nlink = 2;
   in->i_st.st_blksize = 4096;
   in->i_st.st_blocks = 1;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -345,8 +342,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
 
   *st = in->i_st;
 
-  children_[in->ino()] = dir_t();
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   return 0;
@@ -357,25 +353,19 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& children = children_.at(parent_ino);
-  dir_t::const_iterator it = children.find(name);
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t& children = parent_in->dentries;
+  DirInode::dir_t::const_iterator it = children.find(name);
   if (it == children.end())
     return -ENOENT;
 
-  Inode *in = inode_get(it->second);
-  if (!(in->i_st.st_mode & S_IFDIR))
+  if (!it->second->is_directory())
     return -ENOTDIR;
 
-  dir_table_t::iterator it2 =
-    children_.find(it->second);
-  assert(it2 != children_.end());
+  DirInode *in = static_cast<DirInode*>(it->second);
 
-  if (it2->second.size())
+  if (in->dentries.size())
     return -ENOTEMPTY;
-
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
 
   if (parent_in->i_st.st_mode & S_ISVTX) {
     if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
@@ -383,9 +373,8 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
   }
 
   children.erase(it);
-  children_.erase(it2);
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   parent_in->i_st.st_mtime = now;
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_nlink--;
@@ -405,23 +394,23 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
     return -ENAMETOOLONG;
 
   // old
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& parent_children = children_.at(parent_ino);
-  dir_t::const_iterator old_it = parent_children.find(name);
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t& parent_children = parent_in->dentries;
+  DirInode::dir_t::const_iterator old_it = parent_children.find(name);
   if (old_it == parent_children.end())
     return -ENOENT;
 
-  Inode *old_in = inode_get(old_it->second);
+  Inode *old_in = old_it->second;
   assert(old_in);
 
   // new
-  assert(children_.find(newparent_ino) != children_.end());
-  dir_t& newparent_children = children_.at(newparent_ino);
-  dir_t::const_iterator new_it = newparent_children.find(newname);
+  DirInode *newparent_in = inode_get_dir(newparent_ino);
+  DirInode::dir_t& newparent_children = newparent_in->dentries;
+  DirInode::dir_t::const_iterator new_it = newparent_children.find(newname);
 
   Inode *new_in = NULL;
   if (new_it != newparent_children.end()) {
-    new_in = inode_get(new_it->second);
+    new_in = new_it->second;
     assert(new_in);
   }
 
@@ -436,16 +425,10 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
    * to update the ..  entry).  (See also path_resolution(7).) TODO: this is
    * implemented but what is the affect on ".." update?
    */
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
-  assert(parent_in->i_st.st_mode & S_IFDIR);
   int ret = Access(parent_in, W_OK, uid, gid);
   if (ret)
     return ret;
 
-  Inode *newparent_in = inode_get(newparent_ino);
-  assert(newparent_in);
-  assert(newparent_in->i_st.st_mode & S_IFDIR);
   ret = Access(newparent_in, W_OK, uid, gid);
   if (ret)
     return ret;
@@ -488,7 +471,8 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
   if (new_in) {
     if (old_in->i_st.st_mode & S_IFDIR) {
       if (new_in->i_st.st_mode & S_IFDIR) {
-        dir_t& new_children = children_.at(new_it->second);
+        DirInode::dir_t& new_children =
+          static_cast<DirInode*>(new_in)->dentries;
         if (new_children.size())
           return -ENOTEMPTY;
       } else
@@ -498,14 +482,12 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
         return -EISDIR;
     }
 
-    symlinks_.erase(new_it->second);
-    children_.erase(new_it->second);
     newparent_children.erase(new_it);
 
     put_inode(new_in->ino());
   }
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   old_in->i_st.st_ctime = now;
 
   newparent_children[newname] = old_it->second;
@@ -521,10 +503,8 @@ int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
   mode_t clear_mode = 0;
 
   Inode *in = inode_get(ino);
-  assert(in);
 
-  std::time_t now = std::chrono::system_clock::to_time_t(
-      std::chrono::system_clock::now());
+  std::time_t now = time_now();
 
   if (to_set & FUSE_SET_ATTR_MODE) {
     if (uid && in->i_st.st_uid != uid)
@@ -609,23 +589,22 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& children = children_.at(parent_ino);
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
 
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
   int ret = Access(parent_in, W_OK, uid, gid);
   if (ret)
     return ret;
 
-  Inode *in = new Inode(next_ino_++);
+  SymlinkInode *in = new SymlinkInode(next_ino_++);
   in->get();
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
-  symlinks_[in->ino()] = link;
+
+  in->link = link;
 
   in->i_st.st_ino = in->ino();
   in->i_st.st_mode = S_IFLNK;
@@ -633,7 +612,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -647,24 +626,20 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   return 0;
 }
 
-int GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
+ssize_t GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
-  assert(in);
-  assert(in->i_st.st_mode & S_IFLNK);
+  SymlinkInode *in = inode_get_symlink(ino);
 
-  assert(symlinks_.find(ino) != symlinks_.end());
-  const std::string& link = symlinks_.at(ino);
-  size_t link_len = link.size();
+  size_t link_len = in->link.size();
 
   if (link_len > maxlen)
     return -ENAMETOOLONG;
 
-  std::strncpy(path, link.c_str(), maxlen);
+  in->link.copy(path, link_len, 0);
 
-  return (int)link_len;
+  return link_len;
 }
 
 int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
@@ -672,7 +647,7 @@ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
   std::lock_guard<std::mutex> l(mutex_);
 
   Inode *in = inode_get(ino);
-  assert(in);
+  (void)in;
 
   uint64_t nfiles = 0;
   for (inode_table_t::const_iterator it = ino_to_inode_.begin();
@@ -698,19 +673,15 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
   if (newname.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  assert(children_.find(newparent_ino) != children_.end());
-  dir_t& children = children_.at(newparent_ino);
+  DirInode *newparent_in = inode_get_dir(newparent_ino);
+  DirInode::dir_t& children = newparent_in->dentries;
   if (children.find(newname) != children.end())
     return -EEXIST;
 
   Inode *in = inode_get(ino);
-  assert(in);
 
   if (in->i_st.st_mode & S_IFDIR)
     return -EPERM;
-
-  Inode *newparent_in = inode_get(newparent_ino);
-  assert(newparent_in);
 
   int ret = Access(newparent_in, W_OK, uid, gid);
   if (ret)
@@ -721,12 +692,12 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
 
   in->i_st.st_nlink++;
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_ctime = now;
   newparent_in->i_st.st_ctime = now;
   newparent_in->i_st.st_mtime = now;
 
-  children[newname] = in->ino();
+  children[newname] = in;
 
   *st = in->i_st;
 
@@ -799,7 +770,6 @@ int GassyFs::Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid)
   std::lock_guard<std::mutex> l(mutex_);
 
   Inode *in = inode_get(ino);
-  assert(in);
 
   return Access(in, mask, uid, gid);
 }
@@ -819,13 +789,11 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  assert(children_.find(parent_ino) != children_.end());
-  dir_t& children = children_.at(parent_ino);
+  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
 
-  Inode *parent_in = inode_get(parent_ino);
-  assert(parent_in);
   int ret = Access(parent_in, W_OK, uid, gid);
   if (ret)
     return ret;
@@ -833,7 +801,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   Inode *in = new Inode(next_ino_++);
   in->get();
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   in->i_st.st_ino = in->ino();
@@ -842,7 +810,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
@@ -860,7 +828,6 @@ int GassyFs::OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid)
   std::lock_guard<std::mutex> l(mutex_);
 
   Inode *in = inode_get(ino);
-  assert(in);
 
   if ((flags & O_ACCMODE) == O_RDONLY) {
     int ret = Access(in, R_OK, uid, gid);
@@ -916,16 +883,16 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
 
   assert(off >= 2);
 
-  assert(children_.find(ino) != children_.end());
-  const dir_t& children = children_.at(ino);
+  DirInode *dir_in = inode_get_dir(ino);
+  const DirInode::dir_t& children = dir_in->dentries;
 
   size_t count = 0;
   size_t target = off - 2;
 
-  for (dir_t::const_iterator it = children.begin();
+  for (DirInode::dir_t::const_iterator it = children.begin();
       it != children.end(); it++) {
     if (count >= target) {
-      Inode *in = inode_get(it->second);
+      Inode *in = it->second;
       assert(in);
       memset(&st, 0, sizeof(st));
       st.st_ino = in->i_st.st_ino;
@@ -995,7 +962,7 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
   if (ret)
     return ret;
 
-  std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::time_t now = time_now();
   in->i_st.st_ctime = now;
   in->i_st.st_mtime = now;
 
@@ -1023,12 +990,29 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
   return size;
 }
 
+/*
+ * Throws exception if inode is not found.
+ */
 Inode *GassyFs::inode_get(fuse_ino_t ino) const
 {
-  inode_table_t::const_iterator it = ino_to_inode_.find(ino);
-  if (it == ino_to_inode_.end())
-    return NULL;
-  return it->second;
+  return ino_to_inode_.at(ino);
+}
+
+/*
+ *
+ */
+DirInode *GassyFs::inode_get_dir(fuse_ino_t ino) const
+{
+  Inode *in = inode_get(ino);
+  assert(in->is_directory());
+  return static_cast<DirInode*>(in);
+}
+
+SymlinkInode *GassyFs::inode_get_symlink(fuse_ino_t ino) const
+{
+  Inode *in = inode_get(ino);
+  assert(in->is_symlink());
+  return static_cast<SymlinkInode*>(in);
 }
 
 /*
