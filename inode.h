@@ -26,7 +26,7 @@ class Inode {
 
   struct stat i_st;
 
-  typedef std::map<std::string, fuse_ino_t> dir_t;
+  typedef std::map<std::string, Inode*> dir_t;
   dir_t dentries;
 
   std::string link;

@@ -62,7 +62,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   Inode *in = new Inode(next_ino_++);
   in->get();
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   in->i_st.st_ino = in->ino();
@@ -114,7 +114,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
   if (ret)
     return ret;
 
-  Inode *in = inode_get(it->second);
+  Inode *in = it->second;
   assert(in);
   assert(!(in->i_st.st_mode & S_IFDIR));
 
@@ -151,7 +151,7 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat 
   if (it == parent_in->dentries.end())
     return -ENOENT;
 
-  Inode *in = inode_get(it->second);
+  Inode *in = it->second;
   assert(in);
   in->get();
 
@@ -344,7 +344,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
 
   *st = in->i_st;
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   return 0;
@@ -364,7 +364,7 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
   if (it == children.end())
     return -ENOENT;
 
-  Inode *in = inode_get(it->second);
+  Inode *in = it->second;
   if (!(in->i_st.st_mode & S_IFDIR))
     return -ENOTDIR;
 
@@ -407,7 +407,7 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
   if (old_it == parent_children.end())
     return -ENOENT;
 
-  Inode *old_in = inode_get(old_it->second);
+  Inode *old_in = old_it->second;
   assert(old_in);
 
   // new
@@ -420,7 +420,7 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
 
   Inode *new_in = NULL;
   if (new_it != newparent_children.end()) {
-    new_in = inode_get(new_it->second);
+    new_in = new_it->second;
     assert(new_in);
   }
 
@@ -615,7 +615,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   Inode *in = new Inode(next_ino_++);
   in->get();
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   in->link = link;
@@ -718,7 +718,7 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
   newparent_in->i_st.st_ctime = now;
   newparent_in->i_st.st_mtime = now;
 
-  children[newname] = in->ino();
+  children[newname] = in;
 
   *st = in->i_st;
 
@@ -826,7 +826,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   Inode *in = new Inode(next_ino_++);
   in->get();
 
-  children[name] = in->ino();
+  children[name] = in;
   ino_to_inode_[in->ino()] = in;
 
   in->i_st.st_ino = in->ino();
@@ -920,7 +920,7 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
   for (Inode::dir_t::const_iterator it = children.begin();
       it != children.end(); it++) {
     if (count >= target) {
-      Inode *in = inode_get(it->second);
+      Inode *in = it->second;
       assert(in);
       memset(&st, 0, sizeof(st));
       st.st_ino = in->i_st.st_ino;
