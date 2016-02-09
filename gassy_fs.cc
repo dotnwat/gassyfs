@@ -120,8 +120,10 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
     return ret;
 
   Inode *in = it->second;
-  assert(in);
-  assert(!(in->i_st.st_mode & S_IFDIR));
+
+  // see unlink(2): EISDIR may be another case
+  if (in->is_directory())
+    return -EPERM;
 
   if (parent_in->i_st.st_mode & S_ISVTX) {
     if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
