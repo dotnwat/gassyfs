@@ -32,3 +32,23 @@ threads. It is unclear if it is safe to have non-blocking operations that do
 not overlap.
 
 Overlapping I/O for blocking and non-blocking I/O is undefined.
+
+# Locking
+
+todo: move allocations outside locking
+todo: move string length checks outside locking
+
+BlockAllocator
+- internal locking
+
+GassyFs::mutex
+- file system state
+- inode structure (except block list)
+- held during put_inode, which will release blocks
+
+The top-level mutex will protect all metadata except inode block lists and
+file i/o, which will be done holding only a per-inode lock.
+
+Open--truncate
+Truncate, Write, WRiteBuf, Read
+SetAttr--truncate
