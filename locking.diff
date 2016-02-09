@@ -1,0 +1,359 @@
+commit 91ff277b7e47fcc3baefd84a48554c0bdd6a27f9 (refs/remotes/origin/locking)
+Author: Noah Watkins <noahwatkins@gmail.com>
+Date:   Mon Feb 8 21:20:07 2016 -0800
+
+    wip
+    
+    Signed-off-by: Noah Watkins <noahwatkins@gmail.com>
+
+diff --git a/doc/design.md b/doc/design.md
+index f1b1485..49a6bc0 100644
+--- a/doc/design.md
++++ b/doc/design.md
+@@ -32,3 +32,23 @@ threads. It is unclear if it is safe to have non-blocking operations that do
+ not overlap.
+ 
+ Overlapping I/O for blocking and non-blocking I/O is undefined.
++
++# Locking
++
++todo: move allocations outside locking
++todo: move string length checks outside locking
++
++BlockAllocator
++- internal locking
++
++GassyFs::mutex
++- file system state
++- inode structure (except block list)
++- held during put_inode, which will release blocks
++
++The top-level mutex will protect all metadata except inode block lists and
++file i/o, which will be done holding only a per-inode lock.
++
++Open--truncate
++Truncate, Write, WRiteBuf, Read
++SetAttr--truncate
+diff --git a/gassy_fs.cc b/gassy_fs.cc
+index 876f9f0..46449fd 100644
+--- a/gassy_fs.cc
++++ b/gassy_fs.cc
+@@ -44,6 +44,9 @@ GassyFs::GassyFs(BlockAllocator *ba) :
+   stat.f_bavail = stat.f_blocks;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+     int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid)
+ {
+@@ -96,6 +99,9 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -106,6 +112,9 @@ int GassyFs::GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid)
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, gid_t gid)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -120,8 +129,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
+     return ret;
+ 
+   Inode *in = it->second;
+-  assert(in);
+-  assert(!(in->i_st.st_mode & S_IFDIR));
++  assert(!in->is_directory());
+ 
+   if (parent_in->i_st.st_mode & S_ISVTX) {
+     if (uid && uid != in->i_st.st_uid && uid != parent_in->i_st.st_uid)
+@@ -143,6 +151,9 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat *st)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -154,7 +165,6 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat
+     return -ENOENT;
+ 
+   Inode *in = it->second;
+-  assert(in);
+   in->get();
+ 
+   *st = in->i_st;
+@@ -162,6 +172,9 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -198,8 +211,14 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ void GassyFs::Release(fuse_ino_t ino) {}
+ 
++/*
++ * Locking
++ */
+ void GassyFs::Forget(fuse_ino_t ino, long unsigned nlookup)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -208,13 +227,19 @@ void GassyFs::Forget(fuse_ino_t ino, long unsigned nlookup)
+ 
+ ssize_t GassyFs::Write(FileHandle *fh, off_t offset, size_t size, const char *buf)
+ {
+-  std::lock_guard<std::mutex> l(mutex_);
+-
+   Inode *in = fh->in;
++
++  if (!in->try_lock()) {
++    std::cout << "write: lock contention! yay parallelism?!" << std::endl;
++    in->lock();
++  }
++
+   ssize_t ret = Write(in, offset, size, buf);
+   if (ret > 0)
+     fh->pos += ret;
+ 
++  in->unlock();
++
+   return ret;
+ }
+ 
+@@ -224,10 +249,13 @@ ssize_t GassyFs::Write(FileHandle *fh, off_t offset, size_t size, const char *bu
+  */
+ ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
+ {
+-  std::lock_guard<std::mutex> l(mutex_);
+-
+   Inode *in = fh->in;
+ 
++  if (!in->try_lock()) {
++    std::cout << "writebuf: lock contention! yay parallelism?!" << std::endl;
++    in->lock();
++  }
++
+   size_t written = 0;
+ 
+   for (size_t i = bufv->idx; i < bufv->count; i++) {
+@@ -240,22 +268,32 @@ ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
+     ssize_t ret;
+     if (i == bufv->idx) {
+       ret = Write(in, off, buf->size - bufv->off, (char*)buf->mem + bufv->off);
+-      if (ret < 0)
++      if (ret < 0) {
++        in->unlock();
+         return ret;
++      }
+       assert(buf->size > bufv->off);
+-      if (ret < (ssize_t)(buf->size - bufv->off))
++      if (ret < (ssize_t)(buf->size - bufv->off)) {
++        in->unlock();
+         return written;
++      }
+     } else {
+       ret = Write(in, off, buf->size, (char*)buf->mem);
+-      if (ret < 0)
++      if (ret < 0) {
++        in->unlock();
+         return ret;
+-      if (ret < (ssize_t)buf->size)
++      }
++      if (ret < (ssize_t)buf->size) {
++        in->unlock();
+         return written;
++      }
+     }
+     off += ret;
+     written += ret;
+   }
+ 
++  in->unlock();
++
+   return written;
+ }
+ #endif
+@@ -304,6 +342,9 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
+   return new_n;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+     struct stat *st, uid_t uid, gid_t gid)
+ {
+@@ -348,6 +389,9 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
+     uid_t uid, gid_t gid)
+ {
+@@ -384,6 +428,9 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
+     fuse_ino_t newparent_ino, const std::string& newname,
+     uid_t uid, gid_t gid)
+@@ -496,6 +543,9 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
+     uid_t uid, gid_t gid)
+ {
+@@ -580,6 +630,9 @@ int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
+     const std::string& name, struct stat *st, uid_t uid, gid_t gid)
+ {
+@@ -626,6 +679,9 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ ssize_t GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, gid_t gid)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -642,6 +698,9 @@ ssize_t GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid,
+   return link_len;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -665,6 +724,9 @@ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& newname,
+     struct stat *st, uid_t uid, gid_t gid)
+ {
+@@ -704,6 +766,9 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Access(Inode *in, int mask, uid_t uid, gid_t gid)
+ {
+   if (mask == F_OK)
+@@ -765,6 +830,9 @@ int GassyFs::Access(Inode *in, int mask, uid_t uid, gid_t gid)
+ }
+ 
+ 
++/*
++ * Locking
++ */
+ int GassyFs::Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -780,6 +848,8 @@ int GassyFs::Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid)
+  *
+  * TODO: add checks that enforce non-use of special files. Note that this
+  * routine can also create regular files.
++ *
++ * Locking
+  */
+ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+     dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
+@@ -823,6 +893,9 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
+   return 0;
+ }
+ 
++/*
++ * Locking
++ */
+ int GassyFs::OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid)
+ {
+   std::lock_guard<std::mutex> l(mutex_);
+@@ -844,6 +917,8 @@ int GassyFs::OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid)
+  * approach it seems is to encode a cookie in the offset parameter. Current
+  * we just do an in-order traversal of the directory and return the Nth
+  * item.
++ *
++ * Locking
+  */
+ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
+     size_t bufsize, off_t off)
+@@ -954,7 +1029,7 @@ int GassyFs::Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid)
+ }
+ 
+ /*
+- * must hold mutex_
++ * Must be holding in->lock()
+  */
+ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
+ {
+@@ -962,10 +1037,6 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
+   if (ret)
+     return ret;
+ 
+-  std::time_t now = time_now();
+-  in->i_st.st_ctime = now;
+-  in->i_st.st_mtime = now;
+-
+   const off_t orig_offset = offset;
+   const char *src = buf;
+ 
+@@ -985,6 +1056,12 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
+     offset += done;
+   }
+ 
++  // protect the inode stat updates
++  std::lock_guard<std::mutex> l(mutex_);
++
++  std::time_t now = time_now();
++  in->i_st.st_ctime = now;
++  in->i_st.st_mtime = now;
+   in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
+ 
+   return size;

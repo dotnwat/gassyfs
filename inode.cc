@@ -8,6 +8,7 @@ Inode::Inode(fuse_ino_t ino) :
     ino_(ino), ref_(1)
 {
   memset(&i_st, 0, sizeof(i_st));
+  size = 0;
 }
 
 void Inode::get()

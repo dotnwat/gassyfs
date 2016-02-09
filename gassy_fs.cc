@@ -71,8 +71,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   Inode *in = new Inode(next_ino_++);
   in->get();
 
-  children[name] = in;
-  ino_to_inode_[in->ino()] = in;
+  std::time_t now = time_now();
 
   in->i_st.st_ino = in->ino();
   in->i_st.st_mode = S_IFREG | mode;
@@ -80,14 +79,17 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   in->i_st.st_blksize = 4096;
   in->i_st.st_uid = uid;
   in->i_st.st_gid = gid;
-  std::time_t now = time_now();
   in->i_st.st_atime = now;
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
 
+  children[name] = in;
+  ino_to_inode_[in->ino()] = in;
+
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
 
+  // st_size will be zero.. OK
   *st = in->i_st;
 
   FileHandle *fh = new FileHandle(in);
@@ -101,7 +103,10 @@ int GassyFs::GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid)
   std::lock_guard<std::mutex> l(mutex_);
 
   Inode *in = inode_get(ino);
+  in->lock();
+  in->i_st.st_size = in->size;
   *st = in->i_st;
+  in->unlock();
 
   return 0;
 }
@@ -157,7 +162,10 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat 
   assert(in);
   in->get();
 
+  in->lock();
+  in->i_st.st_size = in->size;
   *st = in->i_st;
+  in->unlock();
 
   return 0;
 }
@@ -208,24 +216,53 @@ void GassyFs::Forget(fuse_ino_t ino, long unsigned nlookup)
 
 ssize_t GassyFs::Write(FileHandle *fh, off_t offset, size_t size, const char *buf)
 {
+  Inode *in = fh->in;
+
+  if (!in->try_lock()) {
+    std::cout << "write: contention! parallelism?!" << std::endl;
+    in->lock();
+  }
+
+  ssize_t ret = WriteLocked(in, offset, size, buf);
+
+  in->unlock();
+
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = fh->in;
-  ssize_t ret = Write(in, offset, size, buf);
+  std::time_t now = time_now();
+  in->i_st.st_ctime = now;
+  in->i_st.st_mtime = now;
+  // i_st.st_size updated from in->size when needed
 
   return ret;
 }
 
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
-/*
- *
- */
 ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   Inode *in = fh->in;
 
+  if (!in->try_lock()) {
+    std::cout << "writebuf: contention! parallelism?!" << std::endl;
+    in->lock();
+  }
+
+  ssize_t ret = WriteBufLocked(in, bufv, off);
+
+  in->unlock();
+
+  std::lock_guard<std::mutex> l(mutex_);
+
+  std::time_t now = time_now();
+  in->i_st.st_ctime = now;
+  in->i_st.st_mtime = now;
+  // i_st.st_size updated from in->size when needed
+
+  return ret;
+}
+
+ssize_t GassyFs::WriteBufLocked(Inode *in, struct fuse_bufvec *bufv, off_t off)
+{
   size_t written = 0;
 
   for (size_t i = bufv->idx; i < bufv->count; i++) {
@@ -237,14 +274,14 @@ ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
 
     ssize_t ret;
     if (i == bufv->idx) {
-      ret = Write(in, off, buf->size - bufv->off, (char*)buf->mem + bufv->off);
+      ret = WriteLocked(in, off, buf->size - bufv->off, (char*)buf->mem + bufv->off);
       if (ret < 0)
         return ret;
       assert(buf->size > bufv->off);
       if (ret < (ssize_t)(buf->size - bufv->off))
         return written;
     } else {
-      ret = Write(in, off, buf->size, (char*)buf->mem);
+      ret = WriteLocked(in, off, buf->size, (char*)buf->mem);
       if (ret < 0)
         return ret;
       if (ret < (ssize_t)buf->size)
@@ -261,21 +298,23 @@ ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
 ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
     size_t size, char *buf)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   Inode *in = fh->in;
 
-  std::time_t now = time_now();
-  in->i_st.st_atime = now;
+  if (!in->try_lock()) {
+    std::cout << "read: contention! parallelism?!" << std::endl;
+    in->lock();
+  }
 
   // reading past eof returns nothing
-  if (offset >= in->i_st.st_size || size == 0)
+  if (offset >= in->size || size == 0) {
+    in->unlock();
     return 0;
+  }
 
   // read up until eof
   size_t left;
-  if ((off_t)(offset + size) > in->i_st.st_size)
-    left = in->i_st.st_size - offset;
+  if ((off_t)(offset + size) > in->size)
+    left = in->size - offset;
   else
     left = size;
 
@@ -296,6 +335,13 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
     offset += done;
     left -= done;
   }
+
+  in->unlock();
+
+  std::lock_guard<std::mutex> l(mutex_);
+
+  std::time_t now = time_now();
+  in->i_st.st_atime = now;
 
   return new_n;
 }
@@ -336,6 +382,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   parent_in->i_st.st_mtime = now;
   parent_in->i_st.st_nlink++;
 
+  // st_size will be zero: OK
   *st = in->i_st;
 
   children[name] = in;
@@ -571,7 +618,10 @@ int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
   if (to_set & FUSE_SET_ATTR_MODE)
     in->i_st.st_mode &= ~clear_mode;
 
+  in->lock();
+  in->i_st.st_size = in->size;
   *attr = in->i_st;
+  in->unlock();
 
   return 0;
 }
@@ -613,10 +663,12 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   in->i_st.st_mtime = now;
   in->i_st.st_ctime = now;
   in->i_st.st_size = link.length();
+  in->size = link.length(); // OK w/o lock: new inode cannot be reached yet
 
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
 
+  // st.st_size is set above: OK
   *st = in->i_st;
 
   return 0;
@@ -695,7 +747,10 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
 
   children[newname] = in;
 
+  in->lock();
+  in->i_st.st_size = in->size;
   *st = in->i_st;
+  in->unlock();
 
   return 0;
 }
@@ -814,6 +869,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
 
+  // st.st_size will be zero: OK
   *st = in->i_st;
 
   return 0;
@@ -910,18 +966,30 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
  */
 void GassyFs::ReleaseDir(fuse_ino_t ino) {}
 
-/*
- * must hold mutex_
- */
 int GassyFs::Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid)
 {
-  std::cout << in->ino() << " " << newsize << std::endl;
   int ret = Access(in, W_OK, uid, gid);
   if (ret)
     return ret;
-  if (in->i_st.st_size == newsize) {
+
+  // truncate holding inode lock
+  if (!in->try_lock()) {
+    std::cout << "truncate: contention! parallelism?!" << std::endl;
+    in->lock();
+  }
+
+  ret = TruncateLocked(in, newsize, uid, gid);
+
+  in->unlock();
+
+  return ret;
+}
+
+int GassyFs::TruncateLocked(Inode *in, off_t newsize, uid_t uid, gid_t gid)
+{
+  if (in->size == newsize) {
     return 0;
-  } else if (in->i_st.st_size > newsize) {
+  } else if (in->size > newsize) {
     std::vector<Block>& blks = in->blocks();
     size_t blkid = newsize / BLOCK_SIZE;
     assert(blkid < blks.size());
@@ -931,36 +999,29 @@ int GassyFs::Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid)
       blks.pop_back();
     }
     assert(blkid == (blks.size() - 1));
-    in->i_st.st_size = newsize;
+    in->size = newsize;
   } else {
     char zeros[4096];
     memset(zeros, 0, sizeof(zeros));
-    while (in->i_st.st_size < newsize) {
-      ssize_t ret = Write(in, in->i_st.st_size,
+    while (in->size < newsize) {
+      ssize_t ret = WriteLocked(in, in->size,
           sizeof(zeros), zeros);
       assert(ret > 0);
     }
-    if (in->i_st.st_size > newsize)
-      return Truncate(in, newsize, uid, gid);
+    if (in->size > newsize)
+      return TruncateLocked(in, newsize, uid, gid);
     else
-      assert(in->i_st.st_size == newsize);
+      assert(in->size == newsize);
   }
 
   return 0;
 }
 
-/*
- * must hold mutex_
- */
-ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
+ssize_t GassyFs::WriteLocked(Inode *in, off_t offset, size_t size, const char *buf)
 {
   int ret = in->set_capacity(offset + size, ba_);
   if (ret)
     return ret;
-
-  std::time_t now = time_now();
-  in->i_st.st_ctime = now;
-  in->i_st.st_mtime = now;
 
   const off_t orig_offset = offset;
   const char *src = buf;
@@ -981,7 +1042,7 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
     offset += done;
   }
 
-  in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
+  in->size = std::max(in->size, orig_offset + (off_t)size);
 
   return size;
 }

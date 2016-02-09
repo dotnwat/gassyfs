@@ -1,4 +1,5 @@
 #include <map>
+#include <mutex>
 #include <vector>
 
 #include <fuse.h>
@@ -25,14 +26,28 @@ class Inode {
   std::vector<Block>& blocks();
 
   struct stat i_st;
+  off_t size;
 
   bool is_directory() const;
   bool is_symlink() const;
+
+  void lock() {
+    mutex_.lock();
+  }
+
+  bool try_lock() {
+    return mutex_.try_lock();
+  }
+
+  void unlock() {
+    mutex_.unlock();
+  }
 
  private:
   fuse_ino_t ino_;
   long int ref_;
   std::vector<Block> blks_;
+  std::mutex mutex_;
 };
 
 class DirInode : public Inode {

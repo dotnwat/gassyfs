@@ -31,6 +31,7 @@ class GassyFs {
 
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   ssize_t WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off);
+  ssize_t WriteBufLocked(Inode *in, struct fuse_bufvec *bufv, off_t off);
 #endif
 
   ssize_t Read(FileHandle *fh, off_t offset, size_t size, char *buf);
@@ -76,8 +77,9 @@ class GassyFs {
   typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
 
   int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid);
+  int TruncateLocked(Inode *in, off_t newsize, uid_t uid, gid_t gid);
 
-  ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf);
+  ssize_t WriteLocked(Inode *in, off_t offset, size_t size, const char *buf);
 
   Inode *inode_get(fuse_ino_t ino) const;
   DirInode *inode_get_dir(fuse_ino_t ino) const;
