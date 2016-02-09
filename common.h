@@ -30,10 +30,9 @@ class SymlinkInode;
 
 struct FileHandle {
   Inode *in;
-  off_t pos;
 
   FileHandle(Inode *in) :
-    in(in), pos(0)
+    in(in)
   {}
 };
 

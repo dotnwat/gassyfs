@@ -212,8 +212,6 @@ ssize_t GassyFs::Write(FileHandle *fh, off_t offset, size_t size, const char *bu
 
   Inode *in = fh->in;
   ssize_t ret = Write(in, offset, size, buf);
-  if (ret > 0)
-    fh->pos += ret;
 
   return ret;
 }
@@ -298,8 +296,6 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
     offset += done;
     left -= done;
   }
-
-  fh->pos += new_n;
 
   return new_n;
 }
