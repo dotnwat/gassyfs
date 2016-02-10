@@ -91,6 +91,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   *st = in->i_st;
 
   FileHandle *fh = new FileHandle(in);
+  fh->flags = flags;
   *fhp = fh;
 
   return 0;
@@ -195,6 +196,7 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
   }
 
   FileHandle *fh = new FileHandle(in);
+  fh->flags = flags;
   *fhp = fh;
 
   return 0;
@@ -498,8 +500,8 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
   return 0;
 }
 
-int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
-    uid_t uid, gid_t gid)
+int GassyFs::SetAttr(fuse_ino_t ino, FileHandle *fh, struct stat *attr,
+    int to_set, uid_t uid, gid_t gid)
 {
   std::lock_guard<std::mutex> l(mutex_);
   mode_t clear_mode = 0;
@@ -555,10 +557,16 @@ int GassyFs::SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
   }
 
   if (to_set & FUSE_SET_ATTR_SIZE) {
-    if (uid) {
-      int ret = Access(in, W_OK, uid, gid);
-      if (ret)
-        return ret;
+
+    if (uid) {   // not root
+      if (!fh) { // not open file descriptor
+        int ret = Access(in, W_OK, uid, gid);
+        if (ret)
+          return ret;
+      } else if (((fh->flags & O_ACCMODE) != O_WRONLY) &&
+                 ((fh->flags & O_ACCMODE) != O_RDWR)) {
+        return -EACCES;
+      }
     }
 
     // impose maximum size of 2TB
@@ -921,10 +929,6 @@ void GassyFs::ReleaseDir(fuse_ino_t ino) {}
  */
 int GassyFs::Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid)
 {
-  std::cout << in->ino() << " " << newsize << std::endl;
-  int ret = Access(in, W_OK, uid, gid);
-  if (ret)
-    return ret;
   if (in->i_st.st_size == newsize) {
     return 0;
   } else if (in->i_st.st_size > newsize) {

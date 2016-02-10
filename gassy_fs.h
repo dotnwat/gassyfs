@@ -45,7 +45,7 @@ class GassyFs {
       fuse_ino_t newparent_ino, const std::string& newname,
       uid_t uid, gid_t gid);
 
-  int SetAttr(fuse_ino_t ino, struct stat *attr, int to_set,
+  int SetAttr(fuse_ino_t ino, FileHandle *fh, struct stat *attr, int to_set,
       uid_t uid, gid_t gid);
 
   int Symlink(const std::string& link, fuse_ino_t parent_ino,
