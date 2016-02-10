@@ -33,3 +33,6 @@ mount
 
 cd mount
 sudo prove -r ../test/pjd-fstest-20090130-RC/tests/
+sudo rm -rf *
+
+sudo ../test/git.sh

@@ -276,7 +276,11 @@ static void ll_setattr(fuse_req_t req, fuse_ino_t ino, struct stat *attr,
   GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
   const struct fuse_ctx *ctx = fuse_req_ctx(req);
 
-  int ret = fs->SetAttr(ino, attr, to_set, ctx->uid, ctx->gid);
+  FileHandle *fh = NULL;
+  if (fi)
+    fh = (FileHandle*)fi->fh;
+
+  int ret = fs->SetAttr(ino, fh, attr, to_set, ctx->uid, ctx->gid);
   if (ret == 0)
     fuse_reply_attr(req, attr, 0);
   else

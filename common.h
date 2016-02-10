@@ -31,9 +31,10 @@ class SymlinkInode;
 struct FileHandle {
   Inode *in;
   off_t pos;
+  int flags;
 
   FileHandle(Inode *in) :
-    in(in), pos(0)
+    in(in), pos(0), flags(0)
   {}
 };
 
