@@ -5,7 +5,7 @@ endif
 
 CXX=g++ -g
 
-CXXFLAGS += -Wall -std=c++11 -Wno-deprecated-register
+CXXFLAGS += -Wall -std=c++11 -Wno-unused-function
 CPPFLAGS += -DGASNET_PAR=1
 CPPFLAGS += -I$(GASNET)/include
 LDFLAGS += -L$(GASNET)/lib
