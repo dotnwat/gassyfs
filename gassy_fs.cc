@@ -202,7 +202,11 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
   return 0;
 }
 
-void GassyFs::Release(fuse_ino_t ino) {}
+void GassyFs::Release(fuse_ino_t ino, FileHandle *fh)
+{
+  assert(fh);
+  delete fh;
+}
 
 void GassyFs::Forget(fuse_ino_t ino, long unsigned nlookup)
 {

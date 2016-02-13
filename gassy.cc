@@ -51,8 +51,7 @@ static void ll_release(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi
   GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
   FileHandle *fh = (FileHandle*)fi->fh;
 
-  fs->Release(ino);
-  delete fh;
+  fs->Release(ino, fh); // will delete fh
   fuse_reply_err(req, 0);
 }
 

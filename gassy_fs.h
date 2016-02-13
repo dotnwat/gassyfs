@@ -25,7 +25,7 @@ class GassyFs {
 
   int Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid);
 
-  void Release(fuse_ino_t ino);
+  void Release(fuse_ino_t ino, FileHandle *fh);
 
   void Forget(fuse_ino_t ino, long unsigned nlookup);
 
