@@ -62,7 +62,7 @@ class GassyFs {
   int Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& newname,
       struct stat *st, uid_t uid, gid_t gid);
 
-  int Access(Inode *in, int mask, uid_t uid, gid_t gid);
+  int Access(Inode::Ptr in, int mask, uid_t uid, gid_t gid);
 
   int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid);
 
@@ -77,15 +77,15 @@ class GassyFs {
   void ReleaseDir(fuse_ino_t ino);
 
  private:
-  typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
+  typedef std::unordered_map<fuse_ino_t, Inode::Ptr> inode_table_t;
 
-  int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid);
+  int Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid);
 
-  ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf);
+  ssize_t Write(Inode::Ptr in, off_t offset, size_t size, const char *buf);
 
-  Inode *inode_get(fuse_ino_t ino) const;
-  DirInode *inode_get_dir(fuse_ino_t ino) const;
-  SymlinkInode *inode_get_symlink(fuse_ino_t ino) const;
+  Inode::Ptr inode_get(fuse_ino_t ino) const;
+  DirInode::Ptr inode_get_dir(fuse_ino_t ino) const;
+  SymlinkInode::Ptr inode_get_symlink(fuse_ino_t ino) const;
 
   void put_inode(fuse_ino_t ino, long unsigned dec = 1);
 

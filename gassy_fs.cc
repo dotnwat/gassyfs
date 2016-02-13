@@ -22,7 +22,7 @@ GassyFs::GassyFs(BlockAllocator *ba) :
   next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
 {
   // setup root inode
-  DirInode *root = new DirInode(FUSE_ROOT_ID);
+  auto root = std::make_shared<DirInode>(FUSE_ROOT_ID);
   root->i_st.st_mode = S_IFDIR | 0755;
   root->i_st.st_nlink = 2;
   std::time_t now = time_now();
@@ -52,7 +52,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
@@ -68,7 +68,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
    * need one here. The scenario that is of interest is removing a file that
    * is open.
    */
-  Inode *in = new Inode(next_ino_++);
+  auto in = std::make_shared<Inode>(next_ino_++);
   in->get();
 
   children[name] = in;
@@ -101,7 +101,7 @@ int GassyFs::GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
+  auto in = inode_get(ino);
   *st = in->i_st;
 
   return 0;
@@ -111,7 +111,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
   if (it == parent_in->dentries.end())
     return -ENOENT;
@@ -120,7 +120,7 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
   if (ret)
     return ret;
 
-  Inode *in = it->second;
+  auto in = it->second;
 
   // see unlink(2): EISDIR may be another case
   if (in->is_directory())
@@ -151,12 +151,12 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat 
   std::lock_guard<std::mutex> l(mutex_);
 
   // FIXME: should this be -ENOTDIR or -ENOENT in some cases?
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t::const_iterator it = parent_in->dentries.find(name);
   if (it == parent_in->dentries.end())
     return -ENOENT;
 
-  Inode *in = it->second;
+  auto in = it->second;
   assert(in);
   in->get();
 
@@ -169,7 +169,7 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
+  auto in = inode_get(ino);
 
   int mode = 0;
   if ((flags & O_ACCMODE) == O_RDONLY)
@@ -218,7 +218,7 @@ ssize_t GassyFs::Write(FileHandle *fh, off_t offset, size_t size, const char *bu
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = fh->in;
+  Inode::Ptr in = fh->in;
   ssize_t ret = Write(in, offset, size, buf);
   if (ret > 0)
     fh->pos += ret;
@@ -234,7 +234,7 @@ ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = fh->in;
+  Inode::Ptr in = fh->in;
 
   size_t written = 0;
 
@@ -273,7 +273,7 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = fh->in;
+  Inode::Ptr in = fh->in;
 
   std::time_t now = time_now();
   in->i_st.st_atime = now;
@@ -320,7 +320,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
@@ -329,7 +329,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (ret)
     return ret;
 
-  DirInode *in = new DirInode(next_ino_++);
+  auto in = std::make_shared<DirInode>(next_ino_++);
   in->get();
 
   in->i_st.st_uid = uid;
@@ -361,7 +361,7 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
   DirInode::dir_t::const_iterator it = children.find(name);
   if (it == children.end())
@@ -370,7 +370,7 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
   if (!it->second->is_directory())
     return -ENOTDIR;
 
-  DirInode *in = static_cast<DirInode*>(it->second);
+  auto in = std::static_pointer_cast<DirInode>(it->second);
 
   if (in->dentries.size())
     return -ENOTEMPTY;
@@ -402,21 +402,21 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
     return -ENAMETOOLONG;
 
   // old
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t& parent_children = parent_in->dentries;
   DirInode::dir_t::const_iterator old_it = parent_children.find(name);
   if (old_it == parent_children.end())
     return -ENOENT;
 
-  Inode *old_in = old_it->second;
+  Inode::Ptr old_in = old_it->second;
   assert(old_in);
 
   // new
-  DirInode *newparent_in = inode_get_dir(newparent_ino);
+  auto newparent_in = inode_get_dir(newparent_ino);
   DirInode::dir_t& newparent_children = newparent_in->dentries;
   DirInode::dir_t::const_iterator new_it = newparent_children.find(newname);
 
-  Inode *new_in = NULL;
+  Inode::Ptr new_in = NULL;
   if (new_it != newparent_children.end()) {
     new_in = new_it->second;
     assert(new_in);
@@ -480,7 +480,7 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
     if (old_in->i_st.st_mode & S_IFDIR) {
       if (new_in->i_st.st_mode & S_IFDIR) {
         DirInode::dir_t& new_children =
-          static_cast<DirInode*>(new_in)->dentries;
+          std::static_pointer_cast<DirInode>(new_in)->dentries;
         if (new_children.size())
           return -ENOTEMPTY;
       } else
@@ -510,7 +510,7 @@ int GassyFs::SetAttr(fuse_ino_t ino, FileHandle *fh, struct stat *attr,
   std::lock_guard<std::mutex> l(mutex_);
   mode_t clear_mode = 0;
 
-  Inode *in = inode_get(ino);
+  Inode::Ptr in = inode_get(ino);
 
   std::time_t now = time_now();
 
@@ -603,7 +603,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  auto parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
@@ -612,7 +612,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   if (ret)
     return ret;
 
-  SymlinkInode *in = new SymlinkInode(next_ino_++);
+  auto in = std::make_shared<SymlinkInode>(next_ino_++);
   in->get();
 
   children[name] = in;
@@ -644,7 +644,7 @@ ssize_t GassyFs::Readlink(fuse_ino_t ino, char *path, size_t maxlen, uid_t uid, 
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  SymlinkInode *in = inode_get_symlink(ino);
+  SymlinkInode::Ptr in = inode_get_symlink(ino);
 
   size_t link_len = in->link.size();
 
@@ -660,7 +660,7 @@ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
+  Inode::Ptr in = inode_get(ino);
   (void)in;
 
   uint64_t nfiles = 0;
@@ -687,12 +687,12 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
   if (newname.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  DirInode *newparent_in = inode_get_dir(newparent_ino);
+  DirInode::Ptr newparent_in = inode_get_dir(newparent_ino);
   DirInode::dir_t& children = newparent_in->dentries;
   if (children.find(newname) != children.end())
     return -EEXIST;
 
-  Inode *in = inode_get(ino);
+  Inode::Ptr in = inode_get(ino);
 
   if (in->i_st.st_mode & S_IFDIR)
     return -EPERM;
@@ -718,7 +718,7 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
   return 0;
 }
 
-int GassyFs::Access(Inode *in, int mask, uid_t uid, gid_t gid)
+int GassyFs::Access(Inode::Ptr in, int mask, uid_t uid, gid_t gid)
 {
   if (mask == F_OK)
     return 0;
@@ -783,7 +783,7 @@ int GassyFs::Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
+  Inode::Ptr in = inode_get(ino);
 
   return Access(in, mask, uid, gid);
 }
@@ -803,7 +803,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
-  DirInode *parent_in = inode_get_dir(parent_ino);
+  DirInode::Ptr parent_in = inode_get_dir(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
   if (children.find(name) != children.end())
     return -EEXIST;
@@ -812,7 +812,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (ret)
     return ret;
 
-  Inode *in = new Inode(next_ino_++);
+  auto in = std::make_shared<Inode>(next_ino_++);
   in->get();
 
   children[name] = in;
@@ -841,7 +841,7 @@ int GassyFs::OpenDir(fuse_ino_t ino, int flags, uid_t uid, gid_t gid)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
-  Inode *in = inode_get(ino);
+  Inode::Ptr in = inode_get(ino);
 
   if ((flags & O_ACCMODE) == O_RDONLY) {
     int ret = Access(in, R_OK, uid, gid);
@@ -897,7 +897,7 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
 
   assert(off >= 2);
 
-  DirInode *dir_in = inode_get_dir(ino);
+  DirInode::Ptr dir_in = inode_get_dir(ino);
   const DirInode::dir_t& children = dir_in->dentries;
 
   size_t count = 0;
@@ -906,7 +906,7 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
   for (DirInode::dir_t::const_iterator it = children.begin();
       it != children.end(); it++) {
     if (count >= target) {
-      Inode *in = it->second;
+      Inode::Ptr in = it->second;
       assert(in);
       memset(&st, 0, sizeof(st));
       st.st_ino = in->i_st.st_ino;
@@ -931,7 +931,7 @@ void GassyFs::ReleaseDir(fuse_ino_t ino) {}
 /*
  * must hold mutex_
  */
-int GassyFs::Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid)
+int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
 {
   if (in->i_st.st_size == newsize) {
     return 0;
@@ -966,7 +966,7 @@ int GassyFs::Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid)
 /*
  * must hold mutex_
  */
-ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
+ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf)
 {
   int ret = in->set_capacity(offset + size, ba_);
   if (ret)
@@ -1003,26 +1003,23 @@ ssize_t GassyFs::Write(Inode *in, off_t offset, size_t size, const char *buf)
 /*
  * Throws exception if inode is not found.
  */
-Inode *GassyFs::inode_get(fuse_ino_t ino) const
+Inode::Ptr GassyFs::inode_get(fuse_ino_t ino) const
 {
   return ino_to_inode_.at(ino);
 }
 
-/*
- *
- */
-DirInode *GassyFs::inode_get_dir(fuse_ino_t ino) const
+DirInode::Ptr GassyFs::inode_get_dir(fuse_ino_t ino) const
 {
-  Inode *in = inode_get(ino);
+  auto in = inode_get(ino);
   assert(in->is_directory());
-  return static_cast<DirInode*>(in);
+  return std::static_pointer_cast<DirInode>(in);
 }
 
-SymlinkInode *GassyFs::inode_get_symlink(fuse_ino_t ino) const
+SymlinkInode::Ptr GassyFs::inode_get_symlink(fuse_ino_t ino) const
 {
-  Inode *in = inode_get(ino);
+  auto in = inode_get(ino);
   assert(in->is_symlink());
-  return static_cast<SymlinkInode*>(in);
+  return std::static_pointer_cast<SymlinkInode>(in);
 }
 
 /*
@@ -1032,10 +1029,9 @@ void GassyFs::put_inode(fuse_ino_t ino, long unsigned dec)
 {
   inode_table_t::iterator it = ino_to_inode_.find(ino);
   assert(it != ino_to_inode_.end());
-  Inode *in = it->second;
+  Inode::Ptr in = it->second;
   if (!in->put(dec)) {
     ino_to_inode_.erase(ino);
     in->free_blocks(ba_);
-    delete in;
   }
 }

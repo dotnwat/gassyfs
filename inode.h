@@ -1,6 +1,7 @@
 #ifndef GASSYFS_INODE_H_
 #define GASSYFS_INODE_H_
 #include <map>
+#include <memory>
 #include <vector>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
@@ -10,6 +11,8 @@ class BlockAllocator;
 
 class Inode {
  public:
+  typedef std::shared_ptr<Inode> Ptr;
+
   explicit Inode(fuse_ino_t ino);
 
   void get();
@@ -37,13 +40,15 @@ class Inode {
 
 class DirInode : public Inode {
  public:
-  typedef std::map<std::string, Inode*> dir_t;
+  typedef std::shared_ptr<DirInode> Ptr;
+  typedef std::map<std::string, Inode::Ptr> dir_t;
   explicit DirInode(fuse_ino_t ino) : Inode(ino) {}
   dir_t dentries;
 };
 
 class SymlinkInode : public Inode {
  public:
+  typedef std::shared_ptr<SymlinkInode> Ptr;
   explicit SymlinkInode(fuse_ino_t ino) : Inode(ino) {}
   std::string link;
 };

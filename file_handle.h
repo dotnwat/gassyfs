@@ -3,11 +3,11 @@
 #include "inode.h"
 
 struct FileHandle {
-  Inode *in;
+  Inode::Ptr in;
   off_t pos;
   int flags;
 
-  FileHandle(Inode *in) :
+  FileHandle(Inode::Ptr in) :
     in(in), pos(0), flags(0)
   {}
 };
