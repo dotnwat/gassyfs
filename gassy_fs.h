@@ -7,6 +7,8 @@
 #include <fuse.h>
 #include <fuse_lowlevel.h>
 #include "common.h"
+#include "inode.h"
+#include "file_handle.h"
 
 class BlockAllocator;
 

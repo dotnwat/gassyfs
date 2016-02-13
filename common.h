@@ -24,18 +24,4 @@ struct Block {
   size_t size;
 };
 
-class Inode;
-class DirInode;
-class SymlinkInode;
-
-struct FileHandle {
-  Inode *in;
-  off_t pos;
-  int flags;
-
-  FileHandle(Inode *in) :
-    in(in), pos(0), flags(0)
-  {}
-};
-
 #endif
