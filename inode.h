@@ -1,9 +1,9 @@
+#ifndef GASSYFS_INODE_H_
+#define GASSYFS_INODE_H_
 #include <map>
 #include <vector>
-
 #include <fuse.h>
 #include <fuse_lowlevel.h>
-
 #include "common.h"
 
 class BlockAllocator;
@@ -47,3 +47,5 @@ class SymlinkInode : public Inode {
   explicit SymlinkInode(fuse_ino_t ino) : Inode(ino) {}
   std::string link;
 };
+
+#endif

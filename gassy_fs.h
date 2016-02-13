@@ -1,9 +1,11 @@
+#ifndef GASSYFS_GASSY_FS_H_
+#define GASSYFS_GASSY_FS_H_
+#include <map>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
-#include <unordered_map>
-#include <map>
-#include <string>
-#include <mutex>
 #include "common.h"
 
 class BlockAllocator;
@@ -91,3 +93,5 @@ class GassyFs {
   BlockAllocator *ba_;
   struct statvfs stat;
 };
+
+#endif
