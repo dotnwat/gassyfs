@@ -388,12 +388,14 @@ static void ll_mknod(fuse_req_t req, fuse_ino_t parent, const char *name,
     fuse_reply_err(req, -ret);
 }
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
 static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
     off_t offset, off_t length, struct fuse_file_info *fi)
 {
   // not implemented, but return OK for now.
   fuse_reply_err(req, 0);
 }
+#endif
 
 int main(int argc, char *argv[])
 {
@@ -457,8 +459,8 @@ int main(int argc, char *argv[])
   ll_oper.forget      = ll_forget;
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   ll_oper.forget_multi = ll_forget_multi;
-#endif
   ll_oper.fallocate   = ll_fallocate;
+#endif
 
   /*
    *
