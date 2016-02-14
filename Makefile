@@ -26,7 +26,7 @@ endif
 
 CPPFLAGS += -DFUSE_USE_VERSION=30
 
-OBJS = inode.o block_allocator.o gassy_fs.o
+OBJS = inode.o block_allocator.o gassy_fs.o inode_index.o
 
 %.o: %.cc %.h
 	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
