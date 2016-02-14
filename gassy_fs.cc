@@ -7,9 +7,22 @@
 #include "inode.h"
 #include "block_allocator.h"
 
-/*
- *
- */
+#ifdef __MACH__
+#include <mach/clock.h>
+#include <mach/mach.h>
+#endif
+
+#ifdef __MACH__
+static inline std::time_t time_now(void)
+{
+  clock_serv_t cclock;
+  mach_timespec_t mts;
+  host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &cclock);
+  clock_get_time(cclock, &mts);
+  mach_port_deallocate(mach_task_self(), cclock);
+  return mts.tv_sec;
+}
+#else
 static inline std::time_t time_now(void)
 {
   struct timespec ts;
@@ -17,6 +30,7 @@ static inline std::time_t time_now(void)
   assert(ret == 0);
   return ts.tv_sec;
 }
+#endif
 
 GassyFs::GassyFs(BlockAllocator *ba) :
   next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
