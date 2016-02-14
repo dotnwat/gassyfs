@@ -62,10 +62,10 @@ GassyFs::GassyFs(BlockAllocator *ba) :
 int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
+
+  std::lock_guard<std::mutex> l(mutex_);
 
   auto parent_in = ino_refs_.dir_inode(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
@@ -171,10 +171,6 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat 
 
 int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
-  auto in = ino_refs_.inode(ino);
-
   int mode = 0;
   if ((flags & O_ACCMODE) == O_RDONLY)
     mode = R_OK;
@@ -185,6 +181,10 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
 
   if (!(mode & W_OK) && (flags & O_TRUNC))
     return -EACCES;
+
+  std::lock_guard<std::mutex> l(mutex_);
+
+  auto in = ino_refs_.inode(ino);
 
   int ret = Access(in, mode, uid, gid);
   if (ret)
@@ -319,10 +319,10 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
 int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     struct stat *st, uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
+
+  std::lock_guard<std::mutex> l(mutex_);
 
   auto parent_in = ino_refs_.dir_inode(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
@@ -397,10 +397,10 @@ int GassyFs::Rename(fuse_ino_t parent_ino, const std::string& name,
     fuse_ino_t newparent_ino, const std::string& newname,
     uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   if (name.length() > NAME_MAX || newname.length() > NAME_MAX)
     return -ENAMETOOLONG;
+
+  std::lock_guard<std::mutex> l(mutex_);
 
   // old
   auto parent_in = ino_refs_.dir_inode(parent_ino);
@@ -596,11 +596,11 @@ int GassyFs::SetAttr(fuse_ino_t ino, FileHandle *fh, struct stat *attr,
 int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
     const std::string& name, struct stat *st, uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   // TODO: check length of link path components
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
+
+  std::lock_guard<std::mutex> l(mutex_);
 
   auto parent_in = ino_refs_.dir_inode(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
@@ -675,10 +675,10 @@ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
 int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& newname,
     struct stat *st, uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   if (newname.length() > NAME_MAX)
     return -ENAMETOOLONG;
+
+  std::lock_guard<std::mutex> l(mutex_);
 
   DirInode::Ptr newparent_in = ino_refs_.dir_inode(newparent_ino);
   DirInode::dir_t& children = newparent_in->dentries;
@@ -790,10 +790,10 @@ int GassyFs::Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid)
 int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     dev_t rdev, struct stat *st, uid_t uid, gid_t gid)
 {
-  std::lock_guard<std::mutex> l(mutex_);
-
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
+
+  std::lock_guard<std::mutex> l(mutex_);
 
   DirInode::Ptr parent_in = ino_refs_.dir_inode(parent_ino);
   DirInode::dir_t& children = parent_in->dentries;
