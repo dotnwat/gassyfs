@@ -4,26 +4,30 @@
 #include "block_allocator.h"
 #include "common.h"
 
-Inode::Inode(fuse_ino_t ino) :
-    ino_(ino), ref_(1)
+Inode::Inode(fuse_ino_t ino, BlockAllocator *ba) :
+    ino_(ino), lookup_count_(0), ba_(ba)
 {
   memset(&i_st, 0, sizeof(i_st));
 }
 
-void Inode::get()
+Inode::~Inode()
 {
-  assert(ref_);
-  ref_++;
+  free_blocks(ba_);
 }
 
-bool Inode::put(long int dec)
+bool Inode::lookup_get()
 {
-  assert(ref_);
-  ref_ -= dec;
-  assert(ref_ >= 0);
-  if (ref_ == 0)
-    return false;
-  return true;
+  assert(lookup_count_ >= 0);
+  lookup_count_++;
+  return lookup_count_ == 1;
+}
+
+bool Inode::lookup_put(long int dec)
+{
+  assert(lookup_count_);
+  lookup_count_ -= dec;
+  assert(lookup_count_ >= 0);
+  return lookup_count_ == 0;
 }
 
 int Inode::set_capacity(off_t size, BlockAllocator *ba)

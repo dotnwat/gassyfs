@@ -13,15 +13,10 @@ class Inode {
  public:
   typedef std::shared_ptr<Inode> Ptr;
 
-  explicit Inode(fuse_ino_t ino);
-
-  void get();
-
-  bool put(long int dec = 1);
+  Inode(fuse_ino_t ino, BlockAllocator *ba);
+  virtual ~Inode();
 
   int set_capacity(off_t size, BlockAllocator *ba);
-
-  void free_blocks(BlockAllocator *ba);
 
   fuse_ino_t ino() const;
 
@@ -32,9 +27,15 @@ class Inode {
   bool is_directory() const;
   bool is_symlink() const;
 
+  bool lookup_get();
+  bool lookup_put(long int dec);
+
  private:
+  void free_blocks(BlockAllocator *ba);
+
   fuse_ino_t ino_;
-  long int ref_;
+  long int lookup_count_;
+  BlockAllocator *ba_;
   std::vector<Block> blks_;
 };
 
@@ -42,14 +43,14 @@ class DirInode : public Inode {
  public:
   typedef std::shared_ptr<DirInode> Ptr;
   typedef std::map<std::string, Inode::Ptr> dir_t;
-  explicit DirInode(fuse_ino_t ino) : Inode(ino) {}
+  DirInode(fuse_ino_t ino, BlockAllocator *ba) : Inode(ino, ba) {}
   dir_t dentries;
 };
 
 class SymlinkInode : public Inode {
  public:
   typedef std::shared_ptr<SymlinkInode> Ptr;
-  explicit SymlinkInode(fuse_ino_t ino) : Inode(ino) {}
+  explicit SymlinkInode(fuse_ino_t ino, BlockAllocator *ba) : Inode(ino, ba) {}
   std::string link;
 };
 
