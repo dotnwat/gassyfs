@@ -2,6 +2,7 @@
 #define GASSYFS_INODE_H_
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
