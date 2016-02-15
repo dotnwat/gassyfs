@@ -36,13 +36,11 @@ GassyFs::GassyFs(BlockAllocator *ba) :
   next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
 {
   // setup root inode
-  auto root = std::make_shared<DirInode>(FUSE_ROOT_ID, ba_);
+  std::time_t now = time_now();
+  auto root = std::make_shared<DirInode>(now, ba_);
+  root->set_ino(FUSE_ROOT_ID);
   root->i_st.st_mode = S_IFDIR | 0755;
   root->i_st.st_nlink = 2;
-  std::time_t now = time_now();
-  root->i_st.st_atime = now;
-  root->i_st.st_mtime = now;
-  root->i_st.st_ctime = now;
 
   ino_refs_.add(root);
 
@@ -65,6 +63,14 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
+  std::time_t now = time_now();
+  auto in = std::make_shared<Inode>(now, ba_);
+  in->i_st.st_mode = S_IFREG | mode;
+  in->i_st.st_nlink = 1;
+  in->i_st.st_blksize = 4096;
+  in->i_st.st_uid = uid;
+  in->i_st.st_gid = gid;
+
   std::lock_guard<std::mutex> l(mutex_);
 
   auto parent_in = ino_refs_.dir_inode(parent_ino);
@@ -76,21 +82,9 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (ret)
     return ret;
 
-  auto in = std::make_shared<Inode>(next_ino_++, ba_);
-
+  in->set_ino(next_ino_++);
   children[name] = in;
   ino_refs_.add(in);
-
-  in->i_st.st_ino = in->ino();
-  in->i_st.st_mode = S_IFREG | mode;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
-  std::time_t now = time_now();
-  in->i_st.st_atime = now;
-  in->i_st.st_mtime = now;
-  in->i_st.st_ctime = now;
 
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
@@ -322,6 +316,15 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
+  std::time_t now = time_now();
+  auto in = std::make_shared<DirInode>(now, ba_);
+  in->i_st.st_uid = uid;
+  in->i_st.st_gid = gid;
+  in->i_st.st_mode = S_IFDIR | mode;
+  in->i_st.st_nlink = 2;
+  in->i_st.st_blksize = 4096;
+  in->i_st.st_blocks = 1;
+
   std::lock_guard<std::mutex> l(mutex_);
 
   auto parent_in = ino_refs_.dir_inode(parent_ino);
@@ -333,28 +336,15 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (ret)
     return ret;
 
-  auto in = std::make_shared<DirInode>(next_ino_++, ba_);
-
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
-  in->i_st.st_ino = in->ino();
-  in->i_st.st_mode = S_IFDIR | mode;
-  in->i_st.st_nlink = 2;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_blocks = 1;
-  std::time_t now = time_now();
-  in->i_st.st_atime = now;
-  in->i_st.st_mtime = now;
-  in->i_st.st_ctime = now;
+  in->set_ino(next_ino_++);
+  children[name] = in;
+  ino_refs_.add(in);
 
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
   parent_in->i_st.st_nlink++;
 
   *st = in->i_st;
-
-  children[name] = in;
-  ino_refs_.add(in);
 
   return 0;
 }
@@ -600,6 +590,16 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
+  std::time_t now = time_now();
+  auto in = std::make_shared<SymlinkInode>(now, ba_);
+  in->i_st.st_mode = S_IFLNK;
+  in->i_st.st_nlink = 1;
+  in->i_st.st_blksize = 4096;
+  in->i_st.st_uid = uid;
+  in->i_st.st_gid = gid;
+  in->i_st.st_size = link.length();
+  in->link = link;
+
   std::lock_guard<std::mutex> l(mutex_);
 
   auto parent_in = ino_refs_.dir_inode(parent_ino);
@@ -611,24 +611,9 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
   if (ret)
     return ret;
 
-  auto in = std::make_shared<SymlinkInode>(next_ino_++, ba_);
-
+  in->set_ino(next_ino_++);
   children[name] = in;
   ino_refs_.add(in);
-
-  in->link = link;
-
-  in->i_st.st_ino = in->ino();
-  in->i_st.st_mode = S_IFLNK;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
-  std::time_t now = time_now();
-  in->i_st.st_atime = now;
-  in->i_st.st_mtime = now;
-  in->i_st.st_ctime = now;
-  in->i_st.st_size = link.length();
 
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
@@ -793,6 +778,14 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
+  std::time_t now = time_now();
+  auto in = std::make_shared<Inode>(now, ba_);
+  in->i_st.st_mode = mode;
+  in->i_st.st_nlink = 1;
+  in->i_st.st_blksize = 4096;
+  in->i_st.st_uid = uid;
+  in->i_st.st_gid = gid;
+
   std::lock_guard<std::mutex> l(mutex_);
 
   DirInode::Ptr parent_in = ino_refs_.dir_inode(parent_ino);
@@ -804,21 +797,9 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   if (ret)
     return ret;
 
-  auto in = std::make_shared<Inode>(next_ino_++, ba_);
-
+  in->set_ino(next_ino_++);
   children[name] = in;
   ino_refs_.add(in);
-
-  in->i_st.st_ino = in->ino();
-  in->i_st.st_mode = mode;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
-  std::time_t now = time_now();
-  in->i_st.st_atime = now;
-  in->i_st.st_mtime = now;
-  in->i_st.st_ctime = now;
 
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;

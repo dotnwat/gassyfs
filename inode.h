@@ -14,11 +14,12 @@ class Inode {
  public:
   typedef std::shared_ptr<Inode> Ptr;
 
-  Inode(fuse_ino_t ino, BlockAllocator *ba);
+  Inode(time_t time, BlockAllocator *ba);
   virtual ~Inode();
 
   int set_capacity(off_t size, BlockAllocator *ba);
 
+  void set_ino(fuse_ino_t ino);
   fuse_ino_t ino() const;
 
   std::vector<Block>& blocks();
@@ -34,6 +35,7 @@ class Inode {
  private:
   void free_blocks(BlockAllocator *ba);
 
+  bool ino_set_;
   fuse_ino_t ino_;
   long int lookup_count_;
   BlockAllocator *ba_;
@@ -44,14 +46,14 @@ class DirInode : public Inode {
  public:
   typedef std::shared_ptr<DirInode> Ptr;
   typedef std::map<std::string, Inode::Ptr> dir_t;
-  DirInode(fuse_ino_t ino, BlockAllocator *ba) : Inode(ino, ba) {}
+  DirInode(time_t time, BlockAllocator *ba) : Inode(time, ba) {}
   dir_t dentries;
 };
 
 class SymlinkInode : public Inode {
  public:
   typedef std::shared_ptr<SymlinkInode> Ptr;
-  explicit SymlinkInode(fuse_ino_t ino, BlockAllocator *ba) : Inode(ino, ba) {}
+  SymlinkInode(time_t time, BlockAllocator *ba) : Inode(time, ba) {}
   std::string link;
 };
 
