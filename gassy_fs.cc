@@ -37,10 +37,9 @@ GassyFs::GassyFs(BlockAllocator *ba) :
 {
   // setup root inode
   std::time_t now = time_now();
-  auto root = std::make_shared<DirInode>(now, ba_);
+  auto root = std::make_shared<DirInode>(now, 0, 0, 4096, ba_);
   root->set_ino(FUSE_ROOT_ID);
   root->i_st.st_mode = S_IFDIR | 0755;
-  root->i_st.st_nlink = 2;
 
   ino_refs_.add(root);
 
@@ -64,12 +63,8 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<Inode>(now, ba_);
+  auto in = std::make_shared<Inode>(now, uid, gid, 4096, ba_);
   in->i_st.st_mode = S_IFREG | mode;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
 
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -317,12 +312,8 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<DirInode>(now, ba_);
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
+  auto in = std::make_shared<DirInode>(now, uid, gid, 4096, ba_);
   in->i_st.st_mode = S_IFDIR | mode;
-  in->i_st.st_nlink = 2;
-  in->i_st.st_blksize = 4096;
   in->i_st.st_blocks = 1;
 
   std::lock_guard<std::mutex> l(mutex_);
@@ -591,12 +582,8 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<SymlinkInode>(now, ba_);
+  auto in = std::make_shared<SymlinkInode>(now, uid, gid, 4096, ba_);
   in->i_st.st_mode = S_IFLNK;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
   in->i_st.st_size = link.length();
   in->link = link;
 
@@ -779,12 +766,13 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<Inode>(now, ba_);
+  auto in = std::make_shared<Inode>(now, uid, gid, 4096, ba_);
   in->i_st.st_mode = mode;
-  in->i_st.st_nlink = 1;
-  in->i_st.st_blksize = 4096;
-  in->i_st.st_uid = uid;
-  in->i_st.st_gid = gid;
+
+  // directories start with nlink = 2, but according to mknod(2), "Under
+  // Linux, mknod() cannot be used to create directories.  One should make
+  // directories with mkdir(2).".
+  assert(!in->is_directory());
 
   std::lock_guard<std::mutex> l(mutex_);
 

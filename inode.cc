@@ -4,13 +4,23 @@
 #include "block_allocator.h"
 #include "common.h"
 
-Inode::Inode(time_t time, BlockAllocator *ba) :
+Inode::Inode(time_t time, uid_t uid, gid_t gid,
+    blksize_t blksize, BlockAllocator *ba) :
     ino_set_(false), lookup_count_(0), ba_(ba)
 {
   memset(&i_st, 0, sizeof(i_st));
+
   i_st.st_atime = time;
   i_st.st_mtime = time;
   i_st.st_ctime = time;
+
+  i_st.st_uid = uid;
+  i_st.st_gid = gid;
+
+  i_st.st_blksize = blksize;
+
+  // DirInode will set this to 2
+  i_st.st_nlink = 1;
 }
 
 Inode::~Inode()
