@@ -24,15 +24,31 @@ ifneq ($(shell uname -s),Darwin)
   LIBS += -lrt
 endif
 
+
 CPPFLAGS += -DFUSE_USE_VERSION=30
 
-OBJS = inode.o block_allocator.o gassy_fs.o inode_index.o
+OBJS = gassy.o inode.o block_allocator.o gassy_fs.o inode_index.o
 
-%.o: %.cc %.h
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -c -o $@ $<
+dep_files := $(foreach f, $(OBJS), $(dir f).depend/$(notdir $f).d)
+dep_dirs := $(addsuffix .depend, $(sort $(dir $(OBJS))))
 
-gassy: gassy.cc $(OBJS)
-	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $< $(OBJS) $(LIBS)
+$(dep_dirs):
+	@mkdir -p $@
+
+missing_dep_dirs := $(filter-out $(wildcard $(dep_dirs)), $(dep_dirs))
+dep_file = $(dir $@).depend/$(notdir $@).d
+dep_args = -MF $(dep_file) -MQ $@ -MMD -MP
+
+%.o: %.cc $(missing_dep_dirs)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) -o $*.o -c $(dep_args) $<
+
+gassy: $(OBJS)
+	$(CXX) $(CXXFLAGS) $(CPPFLAGS) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
+
+dep_files_present := $(wildcard $(dep_files))
+ifneq ($(dep_files_present),)
+include $(dep_files_present)
+endif
 
 clean:
-	rm -f $(OBJS) gassy
+	rm -rf $(dep_dirs) $(OBJS) gassy
