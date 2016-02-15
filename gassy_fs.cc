@@ -35,12 +35,13 @@ static inline std::time_t time_now(void)
 GassyFs::GassyFs(BlockAllocator *ba) :
   next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
 {
-  // setup root inode
   std::time_t now = time_now();
-  auto root = std::make_shared<DirInode>(now, 0, 0, 4096, ba_);
-  root->set_ino(FUSE_ROOT_ID);
-  root->i_st.st_mode = S_IFDIR | 0755;
 
+  auto root = std::make_shared<DirInode>(now, 0, 0, 4096, 0755, ba_);
+
+  root->set_ino(FUSE_ROOT_ID);
+
+  // bump kernel inode cache reference count
   ino_refs_.add(root);
 
   memset(&stat, 0, sizeof(stat));
@@ -49,9 +50,7 @@ GassyFs::GassyFs(BlockAllocator *ba) :
   stat.f_bsize = 4096;
   stat.f_frsize = 4096;
   stat.f_blocks = ba_->total_bytes() / 4096;
-
   stat.f_files = 0;
-
   stat.f_bfree = stat.f_blocks;
   stat.f_bavail = stat.f_blocks;
 }
@@ -63,8 +62,9 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<Inode>(now, uid, gid, 4096, ba_);
-  in->i_st.st_mode = S_IFREG | mode;
+
+  auto in = std::make_shared<Inode>(now, uid, gid, 4096, S_IFREG | mode, ba_);
+  auto fh = std::unique_ptr<FileHandle>(new FileHandle(in, flags));
 
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -78,6 +78,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return ret;
 
   in->set_ino(next_ino_++);
+
   children[name] = in;
   ino_refs_.add(in);
 
@@ -85,10 +86,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   parent_in->i_st.st_mtime = now;
 
   *st = in->i_st;
-
-  FileHandle *fh = new FileHandle(in);
-  fh->flags = flags;
-  *fhp = fh;
+  *fhp = fh.release();
 
   return 0;
 }
@@ -98,6 +96,7 @@ int GassyFs::GetAttr(fuse_ino_t ino, struct stat *st, uid_t uid, gid_t gid)
   std::lock_guard<std::mutex> l(mutex_);
 
   auto in = ino_refs_.inode(ino);
+
   *st = in->i_st;
 
   return 0;
@@ -128,13 +127,12 @@ int GassyFs::Unlink(fuse_ino_t parent_ino, const std::string& name, uid_t uid, g
   }
 
   std::time_t now = time_now();
+
   in->i_st.st_ctime = now;
+  in->i_st.st_nlink--;
 
   parent_in->i_st.st_ctime = now;
   parent_in->i_st.st_mtime = now;
-
-  in->i_st.st_nlink--;
-
   parent_in->dentries.erase(it);
 
   return 0;
@@ -151,6 +149,8 @@ int GassyFs::Lookup(fuse_ino_t parent_ino, const std::string& name, struct stat 
     return -ENOENT;
 
   auto in = it->second;
+
+  // bump kernel inode cache reference count
   ino_refs_.get(in);
 
   *st = in->i_st;
@@ -174,6 +174,7 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
   std::lock_guard<std::mutex> l(mutex_);
 
   auto in = ino_refs_.inode(ino);
+  auto fh = std::unique_ptr<FileHandle>(new FileHandle(in, flags));
 
   int ret = Access(in, mode, uid, gid);
   if (ret)
@@ -188,9 +189,7 @@ int GassyFs::Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t 
     in->i_st.st_ctime = now;
   }
 
-  FileHandle *fh = new FileHandle(in);
-  fh->flags = flags;
-  *fhp = fh;
+  *fhp = fh.release();
 
   return 0;
 }
@@ -204,6 +203,8 @@ void GassyFs::Release(fuse_ino_t ino, FileHandle *fh)
 void GassyFs::Forget(fuse_ino_t ino, long unsigned nlookup)
 {
   std::lock_guard<std::mutex> l(mutex_);
+
+  // decrease kernel inode cache reference count
   ino_refs_.put(ino, nlookup);
 }
 
@@ -220,9 +221,6 @@ ssize_t GassyFs::Write(FileHandle *fh, off_t offset, size_t size, const char *bu
 }
 
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
-/*
- *
- */
 ssize_t GassyFs::WriteBuf(FileHandle *fh, struct fuse_bufvec *bufv, off_t off)
 {
   std::lock_guard<std::mutex> l(mutex_);
@@ -312,9 +310,8 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<DirInode>(now, uid, gid, 4096, ba_);
-  in->i_st.st_mode = S_IFDIR | mode;
-  in->i_st.st_blocks = 1;
+
+  auto in = std::make_shared<DirInode>(now, uid, gid, 4096, mode, ba_);
 
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -328,6 +325,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return ret;
 
   in->set_ino(next_ino_++);
+
   children[name] = in;
   ino_refs_.add(in);
 
@@ -364,11 +362,11 @@ int GassyFs::Rmdir(fuse_ino_t parent_ino, const std::string& name,
       return -EPERM;
   }
 
-  children.erase(it);
-
   std::time_t now = time_now();
+
   parent_in->i_st.st_mtime = now;
   parent_in->i_st.st_ctime = now;
+  parent_in->dentries.erase(it);
   parent_in->i_st.st_nlink--;
 
   return 0;
@@ -577,15 +575,12 @@ int GassyFs::SetAttr(fuse_ino_t ino, FileHandle *fh, struct stat *attr,
 int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
     const std::string& name, struct stat *st, uid_t uid, gid_t gid)
 {
-  // TODO: check length of link path components
   if (name.length() > NAME_MAX)
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<SymlinkInode>(now, uid, gid, 4096, ba_);
-  in->i_st.st_mode = S_IFLNK;
-  in->i_st.st_size = link.length();
-  in->link = link;
+
+  auto in = std::make_shared<SymlinkInode>(now, uid, gid, 4096, link, ba_);
 
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -599,6 +594,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
     return ret;
 
   in->set_ino(next_ino_++);
+
   children[name] = in;
   ino_refs_.add(in);
 
@@ -630,12 +626,11 @@ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
 {
   std::lock_guard<std::mutex> l(mutex_);
 
+  // assert we are in this file system
   Inode::Ptr in = ino_refs_.inode(ino);
   (void)in;
 
-  uint64_t nfiles = ino_refs_.nfiles();
-
-  stat.f_files = nfiles;
+  stat.f_files = ino_refs_.nfiles();
   stat.f_bfree = ba_->avail_bytes() / 4096;
   stat.f_bavail = ba_->avail_bytes() / 4096;
 
@@ -653,8 +648,7 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
   std::lock_guard<std::mutex> l(mutex_);
 
   DirInode::Ptr newparent_in = ino_refs_.dir_inode(newparent_ino);
-  DirInode::dir_t& children = newparent_in->dentries;
-  if (children.find(newname) != children.end())
+  if (newparent_in->dentries.find(newname) != newparent_in->dentries.end())
     return -EEXIST;
 
   Inode::Ptr in = ino_refs_.inode(ino);
@@ -666,16 +660,17 @@ int GassyFs::Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& n
   if (ret)
     return ret;
 
+  std::time_t now = time_now();
+
+  // bump in kernel inode cache reference count
   ino_refs_.get(in);
 
+  in->i_st.st_ctime = now;
   in->i_st.st_nlink++;
 
-  std::time_t now = time_now();
-  in->i_st.st_ctime = now;
   newparent_in->i_st.st_ctime = now;
   newparent_in->i_st.st_mtime = now;
-
-  children[newname] = in; // refcount for name
+  newparent_in->dentries[newname] = in;
 
   *st = in->i_st;
 
@@ -766,8 +761,8 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return -ENAMETOOLONG;
 
   std::time_t now = time_now();
-  auto in = std::make_shared<Inode>(now, uid, gid, 4096, ba_);
-  in->i_st.st_mode = mode;
+
+  auto in = std::make_shared<Inode>(now, uid, gid, 4096, mode, ba_);
 
   // directories start with nlink = 2, but according to mknod(2), "Under
   // Linux, mknod() cannot be used to create directories.  One should make
@@ -786,6 +781,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
     return ret;
 
   in->set_ino(next_ino_++);
+
   children[name] = in;
   ino_refs_.add(in);
 
@@ -883,14 +879,8 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
   return pos;
 }
 
-/*
- *
- */
 void GassyFs::ReleaseDir(fuse_ino_t ino) {}
 
-/*
- * must hold mutex_
- */
 int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
 {
   if (in->i_st.st_size == newsize) {
@@ -923,9 +913,6 @@ int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
   return 0;
 }
 
-/*
- * must hold mutex_
- */
 ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf)
 {
   int ret = in->set_capacity(offset + size, ba_);

@@ -14,8 +14,8 @@ class Inode {
  public:
   typedef std::shared_ptr<Inode> Ptr;
 
-  Inode(time_t time, uid_t uid, gid_t gid,
-      blksize_t blksize, BlockAllocator *ba);
+  Inode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
+      mode_t mode, BlockAllocator *ba);
   virtual ~Inode();
 
   int set_capacity(off_t size, BlockAllocator *ba);
@@ -47,10 +47,12 @@ class DirInode : public Inode {
  public:
   typedef std::shared_ptr<DirInode> Ptr;
   typedef std::map<std::string, Inode::Ptr> dir_t;
-  DirInode(time_t time, uid_t uid, gid_t gid,
-      blksize_t blksize, BlockAllocator *ba) :
-    Inode(time, uid, gid, blksize, ba) {
+  DirInode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
+      mode_t mode, BlockAllocator *ba) :
+    Inode(time, uid, gid, blksize, mode, ba) {
       i_st.st_nlink = 2;
+      i_st.st_mode = S_IFDIR | mode;
+      i_st.st_blocks = 1;
     }
   dir_t dentries;
 };
@@ -58,9 +60,13 @@ class DirInode : public Inode {
 class SymlinkInode : public Inode {
  public:
   typedef std::shared_ptr<SymlinkInode> Ptr;
-  SymlinkInode(time_t time, uid_t uid, gid_t gid,
-      blksize_t blksize, BlockAllocator *ba) :
-    Inode(time, uid, gid, blksize, ba) {}
+  SymlinkInode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
+      const std::string& link, BlockAllocator *ba) :
+    Inode(time, uid, gid, blksize, 0, ba) {
+      i_st.st_mode = S_IFLNK;
+      this->link = link;
+      i_st.st_size = link.length();
+    }
   std::string link;
 };
 

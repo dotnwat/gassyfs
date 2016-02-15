@@ -7,8 +7,8 @@ struct FileHandle {
   off_t pos;
   int flags;
 
-  FileHandle(Inode::Ptr in) :
-    in(in), pos(0), flags(0)
+  FileHandle(Inode::Ptr in, int flags) :
+    in(in), pos(0), flags(flags)
   {}
 };
 

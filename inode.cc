@@ -4,8 +4,8 @@
 #include "block_allocator.h"
 #include "common.h"
 
-Inode::Inode(time_t time, uid_t uid, gid_t gid,
-    blksize_t blksize, BlockAllocator *ba) :
+Inode::Inode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
+    mode_t mode, BlockAllocator *ba) :
     ino_set_(false), lookup_count_(0), ba_(ba)
 {
   memset(&i_st, 0, sizeof(i_st));
@@ -21,6 +21,8 @@ Inode::Inode(time_t time, uid_t uid, gid_t gid,
 
   // DirInode will set this to 2
   i_st.st_nlink = 1;
+  // Dir/Sym will set reset this
+  i_st.st_mode = mode;
 }
 
 Inode::~Inode()
