@@ -5,6 +5,7 @@
 #include <vector>
 #include <gasnet.h>
 #include "common.h"
+#include "address_space.h"
 
 /*
  * Block Allocation
@@ -15,7 +16,7 @@
  */
 class BlockAllocator {
  public:
-  BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments);
+  BlockAllocator(AddressSpace *storage);
 
   int GetBlock(Block *bp);
 
@@ -30,6 +31,7 @@ class BlockAllocator {
     size_t addr;
     size_t size;
     size_t curr;
+    int node;
   };
 
   std::deque<Block> free_blks_;

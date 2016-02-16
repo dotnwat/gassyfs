@@ -21,6 +21,7 @@
 #include "inode.h"
 #include "block_allocator.h"
 #include "gassy_fs.h"
+#include "address_space.h"
 
 /*
  *
@@ -399,26 +400,14 @@ static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
 
 int main(int argc, char *argv[])
 {
-  GASNET_SAFE(gasnet_init(&argc, &argv));
-
-  size_t segsz = gasnet_getMaxLocalSegmentSize();
-  GASNET_SAFE(gasnet_attach(NULL, 0, segsz, 0));
-
-  if (gasnet_mynode()) {
-    gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
-    gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
-    gasnet_exit(0);
-    return 0;
-  }
-
-  fprintf(stdout, "GASNet(%d): segment size = %lu\n",
-      gasnet_mynode(), segsz);
-  fflush(stdout);
-
+  /*
+   * Create the address space. When GASNet is being used for storage then only
+   * the rank 0 node/process will return from AddressSpace::init.
+   */
+  AddressSpace storage;
+  int ret = storage.init(&argc, &argv);
+  assert(ret == 0);
   assert(gasnet_mynode() == 0);
-
-  gasnet_seginfo_t segments[gasnet_nodes()];
-  GASNET_SAFE(gasnet_getSegmentInfo(segments, gasnet_nodes()));
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   struct fuse_chan *ch;
@@ -474,8 +463,8 @@ int main(int argc, char *argv[])
   std::cout << std::endl;
   fflush(stdout); // FIXME: std::abc version?
 
-  BlockAllocator *ba = new BlockAllocator(segments, gasnet_nodes());
-  GassyFs *fs = new GassyFs(ba);
+  BlockAllocator *ba = new BlockAllocator(&storage);
+  GassyFs *fs = new GassyFs(&storage, ba);
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {
