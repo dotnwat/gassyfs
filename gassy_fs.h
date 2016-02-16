@@ -11,12 +11,13 @@
 #include "inode.h"
 #include "file_handle.h"
 #include "inode_index.h"
+#include "address_space.h"
 
 class BlockAllocator;
 
 class GassyFs {
  public:
-  explicit GassyFs(BlockAllocator *ba);
+  GassyFs(AddressSpace *storage, BlockAllocator *ba);
 
   int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid);
@@ -88,6 +89,8 @@ class GassyFs {
   struct statvfs stat;
 
   InodeIndex ino_refs_;
+
+  AddressSpace *storage_;
 };
 
 #endif

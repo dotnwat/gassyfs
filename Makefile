@@ -27,7 +27,8 @@ endif
 
 CPPFLAGS += -DFUSE_USE_VERSION=30
 
-OBJS = gassy.o inode.o block_allocator.o gassy_fs.o inode_index.o
+OBJS = gassy.o inode.o block_allocator.o gassy_fs.o inode_index.o \
+	   address_space.o
 
 dep_files := $(foreach f, $(OBJS), $(dir f).depend/$(notdir $f).d)
 dep_dirs := $(addsuffix .depend, $(sort $(dir $(OBJS))))

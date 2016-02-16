@@ -32,8 +32,8 @@ static inline std::time_t time_now(void)
 }
 #endif
 
-GassyFs::GassyFs(BlockAllocator *ba) :
-  next_ino_(FUSE_ROOT_ID + 1), ba_(ba)
+GassyFs::GassyFs(AddressSpace *storage, BlockAllocator *ba) :
+  next_ino_(FUSE_ROOT_ID + 1), ba_(ba), storage_(storage)
 {
   std::time_t now = time_now();
 
@@ -291,7 +291,7 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
     const std::vector<Block>& blks = in->blocks();
     assert(blkid < blks.size());
     const Block& b = blks[blkid];
-    gasnet_get_bulk(dest, b.node, (void*)(b.addr + blkoff), done);
+    storage_->read(dest, b.node, (void*)(b.addr + blkoff), done);
 
     dest += done;
     offset += done;
@@ -935,7 +935,7 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
     const std::vector<Block>& blks = in->blocks();
     assert(blkid < blks.size());
     const Block& b = blks[blkid];
-    gasnet_put_bulk(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+    storage_->write(b.node, (void*)(b.addr + blkoff), (void*)src, done);
 
     left -= done;
     src += done;

@@ -1,21 +1,21 @@
 #include "block_allocator.h"
 
-BlockAllocator::BlockAllocator(gasnet_seginfo_t *segments, unsigned nsegments)
+BlockAllocator::BlockAllocator(AddressSpace *storage)
 {
   total_bytes_ = 0;
-  // FIXME: we don't really fill up the global address space at this point,
-  // but it we need to be making sure that everything is aligned when we
-  // approach the end of a segment.
-  for (unsigned i = 0; i < nsegments; i++) {
+
+  for (int i = 0; i < (int)storage->nodes.size(); i++) {
     Node n;
-    n.addr = (size_t)segments[i].addr;
-    n.size = segments[i].size;
+    n.addr = storage->nodes[i].segment.addr;
+    n.size = storage->nodes[i].segment.len;
     n.curr = n.addr;
+    n.node = i;
     nodes_.push_back(n);
     total_bytes_ += n.size;
   }
+
   curr_node = 0;
-  num_nodes = nsegments;
+  num_nodes = storage->nodes.size();
   avail_bytes_ = total_bytes_;
 }
 
@@ -35,7 +35,7 @@ int BlockAllocator::GetBlock(Block *bp)
   Node& n = nodes_[curr_node];
 
   Block bb;
-  bb.node = curr_node;
+  bb.node = n.node;
   bb.addr = n.curr;
   bb.size = BLOCK_SIZE;
 
