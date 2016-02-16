@@ -1,10 +1,16 @@
+#ifndef GASSYFS_GASSY_FS_H_
+#define GASSYFS_GASSY_FS_H_
+#include <cassert>
+#include <map>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
-#include <unordered_map>
-#include <map>
-#include <string>
-#include <mutex>
 #include "common.h"
+#include "inode.h"
+#include "file_handle.h"
+#include "inode_index.h"
 
 class BlockAllocator;
 
@@ -23,7 +29,7 @@ class GassyFs {
 
   int Open(fuse_ino_t ino, int flags, FileHandle **fhp, uid_t uid, gid_t gid);
 
-  void Release(fuse_ino_t ino);
+  void Release(fuse_ino_t ino, FileHandle *fh);
 
   void Forget(fuse_ino_t ino, long unsigned nlookup);
 
@@ -58,7 +64,7 @@ class GassyFs {
   int Link(fuse_ino_t ino, fuse_ino_t newparent_ino, const std::string& newname,
       struct stat *st, uid_t uid, gid_t gid);
 
-  int Access(Inode *in, int mask, uid_t uid, gid_t gid);
+  int Access(Inode::Ptr in, int mask, uid_t uid, gid_t gid);
 
   int Access(fuse_ino_t ino, int mask, uid_t uid, gid_t gid);
 
@@ -73,21 +79,15 @@ class GassyFs {
   void ReleaseDir(fuse_ino_t ino);
 
  private:
-  typedef std::unordered_map<fuse_ino_t, Inode*> inode_table_t;
-
-  int Truncate(Inode *in, off_t newsize, uid_t uid, gid_t gid);
-
-  ssize_t Write(Inode *in, off_t offset, size_t size, const char *buf);
-
-  Inode *inode_get(fuse_ino_t ino) const;
-  DirInode *inode_get_dir(fuse_ino_t ino) const;
-  SymlinkInode *inode_get_symlink(fuse_ino_t ino) const;
-
-  void put_inode(fuse_ino_t ino, long unsigned dec = 1);
+  int Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid);
+  ssize_t Write(Inode::Ptr in, off_t offset, size_t size, const char *buf);
 
   fuse_ino_t next_ino_;
   std::mutex mutex_;
-  inode_table_t ino_to_inode_;
   BlockAllocator *ba_;
   struct statvfs stat;
+
+  InodeIndex ino_refs_;
 };
+
+#endif

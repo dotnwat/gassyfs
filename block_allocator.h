@@ -1,3 +1,5 @@
+#ifndef GASSYFS_BLOCK_ALLOCATOR_H_
+#define GASSYFS_BLOCK_ALLOCATOR_H_
 #include <deque>
 #include <mutex>
 #include <vector>
@@ -40,3 +42,4 @@ class BlockAllocator {
   std::mutex mutex_;
 };
 
+#endif
