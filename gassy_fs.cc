@@ -7,10 +7,16 @@
 #include "inode.h"
 #include "block_allocator.h"
 
+#ifdef HAVE_LUA
+#include <lua.hpp>
+#endif
+
 #ifdef __MACH__
 #include <mach/clock.h>
 #include <mach/mach.h>
 #endif
+
+#define LUA_ATIME "/tmp/atime.lua"
 
 #ifdef __MACH__
 static inline std::time_t time_now(void)
@@ -29,6 +35,36 @@ static inline std::time_t time_now(void)
   int ret = clock_gettime(CLOCK_REALTIME, &ts);
   assert(ret == 0);
   return ts.tv_sec;
+}
+#endif
+
+#ifdef HAVE_LUA
+int lua_policy(const char *fname)
+{
+  lua_State *L = NULL;
+  L = luaL_newstate();
+  luaL_openlibs(L);
+  lua_newtable(L);
+  if (!L) {
+    std::cerr << "===> ERROR creating Lua state\n";
+    std::cerr.flush();
+    return -ENOSYS;
+  }
+
+  if (luaL_dofile(L, fname) > 0) {
+    std::cerr << "===> ERROR: " << lua_tostring(L, lua_gettop(L)) << "\n"; 
+    std::cerr.flush();
+    return -ENOENT;
+  }
+
+  int ret = lua_tonumber(L, lua_gettop(L));
+  lua_close(L);
+  return ret;
+}
+#else
+int lua_policy(const char *fname)
+{
+   return -ENOSYS;
 }
 #endif
 
@@ -266,8 +302,11 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
 
   Inode::Ptr in = fh->in;
 
-  std::time_t now = time_now();
-  in->i_st.st_atime = now;
+  int ret = lua_policy(LUA_ATIME);
+  if (ret < 0) 
+    in->i_st.st_atime = time_now();
+  else
+    in->i_st.st_atime = ret;
 
   // reading past eof returns nothing
   if (offset >= in->i_st.st_size || size == 0)
