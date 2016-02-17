@@ -1,4 +1,5 @@
 #include "inode_index.h"
+#include <cassert>
 
 void InodeIndex::add(Inode::Ptr inode)
 {
