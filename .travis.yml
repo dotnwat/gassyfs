@@ -5,5 +5,8 @@ before_install:
     - sudo apt-get update -qq
     - sudo apt-get install -qq libfuse-dev build-essential curl libacl1-dev
     - sudo usermod -a -G fuse $USER
+env:
+    - USE_GASNET_EVERYTHING=1
+    - USE_GASNET_EVERYTHING=0
 script:
     - sudo -E su $USER -c 'modprobe fuse && ci/install-gasnet.sh && ci/build.sh && ci/test.sh'
