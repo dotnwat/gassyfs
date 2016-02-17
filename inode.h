@@ -30,15 +30,11 @@ class Inode {
   bool is_directory() const;
   bool is_symlink() const;
 
-  bool lookup_get();
-  bool lookup_put(long int dec);
-
  private:
   void free_blocks(BlockAllocator *ba);
 
   bool ino_set_;
   fuse_ino_t ino_;
-  long int lookup_count_;
   BlockAllocator *ba_;
   std::vector<Block> blks_;
 };

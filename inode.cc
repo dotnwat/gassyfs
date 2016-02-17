@@ -6,7 +6,7 @@
 
 Inode::Inode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
     mode_t mode, BlockAllocator *ba) :
-    ino_set_(false), lookup_count_(0), ba_(ba)
+    ino_set_(false), ba_(ba)
 {
   memset(&i_st, 0, sizeof(i_st));
 
@@ -28,21 +28,6 @@ Inode::Inode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
 Inode::~Inode()
 {
   free_blocks(ba_);
-}
-
-bool Inode::lookup_get()
-{
-  assert(lookup_count_ >= 0);
-  lookup_count_++;
-  return lookup_count_ == 1;
-}
-
-bool Inode::lookup_put(long int dec)
-{
-  assert(lookup_count_);
-  lookup_count_ -= dec;
-  assert(lookup_count_ >= 0);
-  return lookup_count_ == 0;
 }
 
 void Inode::set_ino(fuse_ino_t ino)
