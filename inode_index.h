@@ -16,7 +16,8 @@ class InodeIndex {
   uint64_t nfiles();
 
  private:
-  std::unordered_map<fuse_ino_t, Inode::Ptr> refs_;
+  std::unordered_map<fuse_ino_t,
+    std::pair<long int, Inode::Ptr>> refs_;
 };
 
 #endif
