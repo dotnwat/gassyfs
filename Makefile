@@ -15,6 +15,10 @@ ifeq ($(strip $(CONDUIT)),udp)
   CPPFLAGS += -I$(GASNET)/include/udp-conduit
   LIBS     += -lgasnet-udp-par -lamudp
 endif
+ifeq ($(strip $(CONDUIT)),ibv)
+  CPPFLAGS += -I$(GASNET)/include/ibv-conduit
+  LIBS     += -lgasnet-ibv-par -libverbs
+endif
 
 CPPFLAGS += $(shell pkg-config fuse --cflags)
 LIBS += $(shell pkg-config fuse --libs)
