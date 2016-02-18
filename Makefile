@@ -3,6 +3,13 @@ ifndef GASNET
   $(error GASNET variable is not defined, aborting build)
 endif
 
+ifndef LUA_CPPFLAGS
+  $(warning LUA_CPPFLAGS variable is not defined, continuing without Lua)
+else
+  CPPFLAGS += -I$(LUA_CPPFLAGS) -DHAVE_LUA
+  LIBS     += $(shell pkg-config lua5.2 --libs)
+endif
+
 CXX=g++ -g
 
 CXXFLAGS += -Wall -std=c++11 -Wno-unused-function
