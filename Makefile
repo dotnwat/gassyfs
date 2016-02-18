@@ -24,6 +24,10 @@ CPPFLAGS += $(shell pkg-config fuse --cflags)
 LIBS += $(shell pkg-config fuse --libs)
 LIBS += -lm
 
+ifeq ($(shell uname -s),Darwin)
+  CXXFLAGS += -Wno-deprecated-register
+endif
+
 ifneq ($(shell uname -s),Darwin)
   LIBS += -lrt
 endif
