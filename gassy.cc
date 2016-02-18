@@ -404,8 +404,8 @@ int main(int argc, char *argv[])
    * Create the address space. When GASNet is being used for storage then only
    * the rank 0 node/process will return from AddressSpace::init.
    */
-  AddressSpace storage;
-  int ret = storage.init(&argc, &argv);
+  AddressSpace *storage = new GasnetAddressSpace;
+  int ret = storage->init(&argc, &argv);
   assert(ret == 0);
   assert(gasnet_mynode() == 0);
 
@@ -463,8 +463,8 @@ int main(int argc, char *argv[])
   std::cout << std::endl;
   fflush(stdout); // FIXME: std::abc version?
 
-  BlockAllocator *ba = new BlockAllocator(&storage);
-  GassyFs *fs = new GassyFs(&storage, ba);
+  BlockAllocator *ba = new BlockAllocator(storage);
+  GassyFs *fs = new GassyFs(storage, ba);
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {

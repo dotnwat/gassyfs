@@ -32,7 +32,7 @@ static void AM_seginfo(gasnet_token_t token, void *buf, size_t nbytes)
   gasnet_hsl_unlock(&seginfo_lock);
 }
 
-int AddressSpace::init(int *argc, char ***argv)
+int GasnetAddressSpace::init(int *argc, char ***argv)
 {
   std::cout << "gasnet segment = everything" << std::endl;
 
@@ -109,7 +109,7 @@ int AddressSpace::init(int *argc, char ***argv)
   return 0;
 }
 #else
-int AddressSpace::init(int *argc, char ***argv)
+int GasnetAddressSpace::init(int *argc, char ***argv)
 {
   std::cout << "gasnet segment = fast|large" << std::endl;
 
@@ -147,12 +147,12 @@ int AddressSpace::init(int *argc, char ***argv)
 }
 #endif
 
-void AddressSpace::write(int node, void *dst, void *src, size_t len)
+void GasnetAddressSpace::write(int node, void *dst, void *src, size_t len)
 {
   gasnet_put_bulk(nodes[node].node, dst, src, len);
 }
 
-void AddressSpace::read(void *dest, int node, void *src, size_t len)
+void GasnetAddressSpace::read(void *dest, int node, void *src, size_t len)
 {
   gasnet_get_bulk(dest, nodes[node].node, src, len);
 }
