@@ -6,9 +6,10 @@
 #include <gasnet_tools.h>
 #include "common.h"
 
-int LocalAddressSpace::init(int *argc, char ***argv)
+int LocalAddressSpace::init(int *argc, char ***argv,
+    struct gassyfs_opts *opts)
 {
-  const size_t size = 1ULL << 30;
+  const size_t size = opts->heap_size << 20;
   void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
       MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
   assert(data != MAP_FAILED);
@@ -23,8 +24,10 @@ int LocalAddressSpace::init(int *argc, char ***argv)
 
   nodes.push_back(node);
 
-  std::cout << "node-%02d: segment: " << nodes[0].segment.len
+  std::cout << "node-0: segment: " << nodes[0].segment.len
     << "/" << nodes[0].segment.addr << std::endl;
+
+  opts->rank0_alloc = 1;
 
   return 0;
 }
@@ -65,7 +68,8 @@ static void AM_seginfo(gasnet_token_t token, void *buf, size_t nbytes)
   gasnet_hsl_unlock(&seginfo_lock);
 }
 
-int GasnetAddressSpace::init(int *argc, char ***argv)
+int GasnetAddressSpace::init(int *argc, char ***argv,
+    struct gassyfs_opts *opts)
 {
   std::cout << "gasnet segment = everything" << std::endl;
 
@@ -94,17 +98,31 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
   /*
    * currently rank 0 also contributes memory. We want to avoid this in the
    * future because rank 0 should have a large kernel cache for the FUSE
-   * mount.
+   * mount. But we over ride the decision if there is only one node in the
+   * cluster.
    */
-  const size_t size = 1ULL << 30;
-  void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
-      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-  assert(data != MAP_FAILED);
+  if (!opts->rank0_alloc) {
+    if (gasnet_nodes() == 1)
+      opts->rank0_alloc = 1;
+  }
+
+  // heap contribution
+  gasnet_seginfo_t contrib;
+  contrib.addr = 0;
+  contrib.size = 0;
+
+  // if not rank 0 or alloc on rank 0 is OK
+  if (gasnet_mynode() || opts->rank0_alloc) {
+    const size_t size = opts->heap_size << 20;
+    void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
+        MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+    assert(data != MAP_FAILED);
+
+    contrib.addr = data;
+    contrib.size = size;
+  }
 
   // notify rank 0 of contribution (rank 0 sends to self)
-  gasnet_seginfo_t contrib;
-  contrib.addr = data;
-  contrib.size = size;
   GASNET_SAFE(gasnet_AMRequestMedium0(0, AM_SEGINFO,
         &contrib, sizeof(contrib)));
 
@@ -134,7 +152,7 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
 
     nodes.push_back(node);
 
-    std::cout << "node-%02d: segment: " <<
+    std::cout << "node-" << i << ": segment: " <<
       segments[i].size << "/" << segments[i].addr << std::endl;
   }
 
@@ -145,13 +163,22 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
   return 0;
 }
 #else
-int GasnetAddressSpace::init(int *argc, char ***argv)
+int GasnetAddressSpace::init(int *argc, char ***argv,
+    struct gassyfs_opts *opts)
 {
   std::cout << "gasnet segment = fast|large" << std::endl;
 
   GASNET_SAFE(gasnet_init(argc, argv));
 
   size_t segsz = gasnet_getMaxLocalSegmentSize();
+
+  if (!opts->rank0_alloc) {
+    if (gasnet_nodes() == 1)
+      opts->rank0_alloc = 1;
+    else if (gasnet_mynode() == 0)
+      segsz = 0;
+  }
+
   GASNET_SAFE(gasnet_attach(NULL, 0, segsz, 0));
 
   gasnet_seginfo_t segments[gasnet_nodes()];
@@ -165,6 +192,8 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
     return 0;
   }
 
+  size_t total = 0;
+
   for (int i = 0; i < gasnet_nodes(); i++) {
     Segment seg;
     seg.addr = (size_t)segments[i].addr;
@@ -176,9 +205,16 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
 
     nodes.push_back(node);
 
-    std::cout << "node-%02d: segment: " <<
+    std::cout << "node-" << i << ": segment: " <<
       segments[i].size << "/" << segments[i].addr << std::endl;
+
+    total += seg.len;
   }
+
+  if (opts->rank0_alloc)
+    opts->heap_size = (total >> 20) / gasnet_nodes();
+  else
+    opts->heap_size = (total >> 20) / (gasnet_nodes()-1);
 
   assert(gasnet_mynode() == 0);
 

@@ -14,6 +14,7 @@
 #include <cassert>
 
 #include <fuse.h>
+#include <fuse_opt.h>
 #include <fuse_lowlevel.h>
 #include <gasnet.h>
 
@@ -398,18 +399,83 @@ static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
 }
 #endif
 
+enum {
+  KEY_HELP,
+};
+
+#define GASSYFS_OPT(t, p, v) { t, offsetof(struct gassyfs_opts, p), v }
+
+static struct fuse_opt gassyfs_fuse_opts[] = {
+  GASSYFS_OPT("rank0_alloc",     rank0_alloc, 1),
+  GASSYFS_OPT("local_mode",      local_mode, 1),
+  GASSYFS_OPT("heap_size=%u",    heap_size, 0),
+  FUSE_OPT_KEY("-h",             KEY_HELP),
+  FUSE_OPT_KEY("--help",         KEY_HELP),
+  FUSE_OPT_END
+};
+
+static void usage(const char *progname)
+{
+  printf(
+"gassyfs options:\n"
+"    -o rank0_alloc          rank 0 should contribute heap\n"
+"    -o local_mode           don't use GASNet (implies -o rank0_alloc)\n"
+"    -o heap_size=N          per-node heap size\n"
+);
+}
+
+static int gassyfs_opt_proc(void *data, const char *arg, int key,
+    struct fuse_args *outargs)
+{
+  switch (key) {
+    case FUSE_OPT_KEY_OPT:
+      return 1;
+    case FUSE_OPT_KEY_NONOPT:
+      return 1;
+    case KEY_HELP:
+      usage(NULL);
+      exit(1);
+    default:
+      assert(0);
+      exit(1);
+  }
+}
+
 int main(int argc, char *argv[])
 {
+  struct gassyfs_opts opts;
+
+  // option defaults
+  opts.rank0_alloc = 0;
+  opts.local_mode  = 0;
+  opts.heap_size   = 512;
+
+	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+
+  if (fuse_opt_parse(&args, &opts, gassyfs_fuse_opts,
+        gassyfs_opt_proc) == -1) {
+    exit(1);
+  }
+
+  assert(opts.heap_size > 0);
+
   /*
    * Create the address space. When GASNet is being used for storage then only
    * the rank 0 node/process will return from AddressSpace::init.
    */
-  bool using_gasnet = 0;
-  AddressSpace *storage = new LocalAddressSpace;
-  int ret = storage->init(&argc, &argv);
+  AddressSpace *storage;
+  if (!opts.local_mode)
+    storage = new GasnetAddressSpace;
+  else
+    storage = new LocalAddressSpace;
+
+  int ret = storage->init(&argc, &argv, &opts);
   assert(ret == 0);
 
-  struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+  std::cout << "Local mode:            " << (opts.local_mode ? "yes" : "no") << std::endl;
+  std::cout << "Rank 0 allocation:     " << (opts.rank0_alloc ? "yes" : "no") << std::endl;
+  std::cout << "Heap size:             " << opts.heap_size << std::endl;
+
   struct fuse_chan *ch;
   char *mountpoint;
   int err = -1;
@@ -486,7 +552,7 @@ int main(int argc, char *argv[])
 
   int rv = err ? 1 : 0;
 
-  if (using_gasnet) {
+  if (!opts.local_mode) {
     gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
 
