@@ -29,4 +29,11 @@ class GasnetAddressSpace : public AddressSpace {
   virtual void read(void *dest, int node, void *src, size_t len);
 };
 
+class LocalAddressSpace : public AddressSpace {
+ public:
+  virtual int init(int *argc, char ***argv);
+  virtual void write(int node, void *dst, void *src, size_t len);
+  virtual void read(void *dest, int node, void *src, size_t len);
+};
+
 #endif

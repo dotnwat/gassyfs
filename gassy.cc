@@ -404,10 +404,10 @@ int main(int argc, char *argv[])
    * Create the address space. When GASNet is being used for storage then only
    * the rank 0 node/process will return from AddressSpace::init.
    */
-  AddressSpace *storage = new GasnetAddressSpace;
+  bool using_gasnet = 0;
+  AddressSpace *storage = new LocalAddressSpace;
   int ret = storage->init(&argc, &argv);
   assert(ret == 0);
-  assert(gasnet_mynode() == 0);
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
   struct fuse_chan *ch;
@@ -484,11 +484,14 @@ int main(int argc, char *argv[])
   }
   fuse_opt_free_args(&args);
 
-
-  gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
-  gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
-
   int rv = err ? 1 : 0;
-  gasnet_exit(rv);
+
+  if (using_gasnet) {
+    gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
+    gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
+
+    gasnet_exit(rv);
+  }
+
   return rv;
 }

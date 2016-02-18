@@ -6,6 +6,39 @@
 #include <gasnet_tools.h>
 #include "common.h"
 
+int LocalAddressSpace::init(int *argc, char ***argv)
+{
+  const size_t size = 1ULL << 30;
+  void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
+      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+  assert(data != MAP_FAILED);
+
+  Segment seg;
+  seg.addr = (size_t)data;
+  seg.len = size;
+
+  Node node;
+  node.segment = seg;
+  node.node = 0;
+
+  nodes.push_back(node);
+
+  std::cout << "node-%02d: segment: " << nodes[0].segment.len
+    << "/" << nodes[0].segment.addr << std::endl;
+
+  return 0;
+}
+
+void LocalAddressSpace::write(int node, void *dst, void *src, size_t len)
+{
+  memcpy(dst, src, len);
+}
+
+void LocalAddressSpace::read(void *dest, int node, void *src, size_t len)
+{
+  memcpy(dest, src, len);
+}
+
 #ifdef GASNET_SEGMENT_EVERYTHING
 
 static gasnet_seginfo_t *segments_ptr;
@@ -80,6 +113,7 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
     gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_exit(0);
+    assert(0);
     return 0;
   }
 
@@ -106,6 +140,8 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
 
   gasnet_hsl_unlock(&seginfo_lock);
 
+  assert(gasnet_mynode() == 0);
+
   return 0;
 }
 #else
@@ -125,6 +161,7 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
     gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_exit(0);
+    assert(0);
     return 0;
   }
 
@@ -142,6 +179,8 @@ int GasnetAddressSpace::init(int *argc, char ***argv)
     std::cout << "node-%02d: segment: " <<
       segments[i].size << "/" << segments[i].addr << std::endl;
   }
+
+  assert(gasnet_mynode() == 0);
 
   return 0;
 }
