@@ -8,5 +8,6 @@ before_install:
 env:
     - USE_GASNET_EVERYTHING=1
     - USE_GASNET_EVERYTHING=0
+    - USE_GASNET_EVERYTHING=1 USE_LOCAL_MODE=1
 script:
     - sudo -E su $USER -c 'modprobe fuse && ci/install-gasnet.sh && ci/build.sh && ci/test.sh'

@@ -3,19 +3,23 @@
 set -x
 set -e
 
-# password-less ssh to localhost
-ssh-keygen -f $HOME/.ssh/id_rsa -t rsa -N ''
-cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
-chmod 600 ~/.ssh/authorized_keys
+if [ "$USE_LOCAL_MODE" != "1" ]; then
+  # password-less ssh to localhost
+  ssh-keygen -f $HOME/.ssh/id_rsa -t rsa -N ''
+  cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
+  chmod 600 ~/.ssh/authorized_keys
 
-# disable key checking stuff
-cat ~/.ssh/config || true
+  # disable key checking stuff
+  cat ~/.ssh/config || true
+
 cat <<EOF > ~/.ssh/config
 Host localhost
-   StrictHostKeyChecking no
-   UserKnownHostsFile=/dev/null
+StrictHostKeyChecking no
+UserKnownHostsFile=/dev/null
 EOF
 chmod 600 ~/.ssh/config
+
+fi
 
 # build test
 pushd test/pjd-fstest-20090130-RC
@@ -27,7 +31,11 @@ echo user_allow_other | sudo tee -a /etc/fuse.conf
 sudo cat /etc/fuse.conf || true
 
 mkdir mount
-SSH_SERVERS="localhost" /usr/local/bin/amudprun -np 1 ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc &
+if [ "$USE_LOCAL_MODE" = "1" ]; then
+  ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc -o local_mode -o heap_size=1024 &
+else
+  SSH_SERVERS="localhost" /usr/local/bin/amudprun -np 1 ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc &
+fi
 sleep 5
 mount
 
