@@ -73,7 +73,8 @@ GassyFs::GassyFs(AddressSpace *storage, BlockAllocator *ba) :
 {
   std::time_t now = time_now();
 
-  auto root = std::make_shared<DirInode>(now, 0, 0, 4096, 0755, ba_);
+  auto root = std::make_shared<DirInode>(now,
+      getuid(), getgid(), 4096, 0755, ba_);
 
   root->set_ino(FUSE_ROOT_ID);
 

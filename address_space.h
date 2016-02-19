@@ -2,6 +2,7 @@
 #define GASSYFS_ADDRESS_SPACE_H_
 #include <cstddef>
 #include <vector>
+#include "common.h"
 
 class AddressSpace {
  public:
@@ -15,12 +16,25 @@ class AddressSpace {
     int node;
   };
 
-  int init(int *argc, char ***argv);
-
-  void write(int node, void *dst, void *src, size_t len);
-  void read(void *dest, int node, void *src, size_t len);
+  virtual int init(int *argc, char ***argv, struct gassyfs_opts *opts) = 0;
+  virtual void write(int node, void *dst, void *src, size_t len) = 0;
+  virtual void read(void *dest, int node, void *src, size_t len) = 0;
 
   std::vector<Node> nodes;
+};
+
+class GasnetAddressSpace : public AddressSpace {
+ public:
+  virtual int init(int *argc, char ***argv, struct gassyfs_opts *opts);
+  virtual void write(int node, void *dst, void *src, size_t len);
+  virtual void read(void *dest, int node, void *src, size_t len);
+};
+
+class LocalAddressSpace : public AddressSpace {
+ public:
+  virtual int init(int *argc, char ***argv, struct gassyfs_opts *opts);
+  virtual void write(int node, void *dst, void *src, size_t len);
+  virtual void read(void *dest, int node, void *src, size_t len);
 };
 
 #endif

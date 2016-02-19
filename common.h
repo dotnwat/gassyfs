@@ -24,4 +24,10 @@ struct Block {
   size_t size;
 };
 
+struct gassyfs_opts {
+  int rank0_alloc;
+  int local_mode;
+  size_t heap_size;
+};
+
 #endif
