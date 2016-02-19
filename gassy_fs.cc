@@ -571,12 +571,30 @@ int GassyFs::SetAttr(fuse_ino_t ino, FileHandle *fh, struct stat *attr,
     if (uid && in->i_st.st_uid != uid)
       return -EPERM;
 
+#ifdef FUSE_SET_ATTR_MTIME_NOW
+    if (to_set & FUSE_SET_ATTR_MTIME_NOW)
+      in->i_st.st_mtime = time_now();
+    else
+#endif
     if (to_set & FUSE_SET_ATTR_MTIME)
       in->i_st.st_mtime = attr->st_mtime;
 
+#ifdef FUSE_SET_ATTR_ATIME_NOW
+    if (to_set & FUSE_SET_ATTR_ATIME_NOW)
+      in->i_st.st_atime = time_now();
+    else
+#endif
     if (to_set & FUSE_SET_ATTR_ATIME)
       in->i_st.st_atime = attr->st_atime;
   }
+
+#ifdef FUSE_SET_ATTR_CTIME
+  if (to_set & FUSE_SET_ATTR_CTIME) {
+    if (uid && in->i_st.st_uid != uid)
+      return -EPERM;
+    in->i_st.st_ctime = attr->st_ctime;
+  }
+#endif
 
   if (to_set & FUSE_SET_ATTR_SIZE) {
 
