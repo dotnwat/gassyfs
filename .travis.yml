@@ -3,7 +3,7 @@ sudo: required
 dist: trusty
 before_install:
     - sudo apt-get update -qq
-    - sudo apt-get install -qq libfuse-dev build-essential curl libacl1-dev
+    - sudo apt-get install -qq libfuse-dev build-essential curl libacl1-dev samtools
     - sudo usermod -a -G fuse $USER
 env:
     - USE_GASNET_EVERYTHING=1
