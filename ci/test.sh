@@ -44,3 +44,7 @@ sudo prove -r ../test/pjd-fstest-20090130-RC/tests/
 sudo rm -rf *
 
 sudo ../test/git.sh
+sudo rm -rf *
+
+sudo ../test/bamsort.sh
+sudo rm -rf *
