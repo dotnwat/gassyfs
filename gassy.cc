@@ -463,13 +463,18 @@ int main(int argc, char *argv[])
    * Create the address space. When GASNet is being used for storage then only
    * the rank 0 node/process will return from AddressSpace::init.
    */
+  int ret;
   AddressSpace *storage;
-  if (!opts.local_mode)
-    storage = new GasnetAddressSpace;
-  else
-    storage = new LocalAddressSpace;
+  if (!opts.local_mode) {
+    auto s = new GASNetAddressSpace;
+    ret = s->init(&argc, &argv, &opts);
+    storage = s;
+  } else {
+    auto s = new LocalAddressSpace;
+    ret = s->init(&opts);
+    storage = s;
+  }
 
-  int ret = storage->init(&argc, &argv, &opts);
   assert(ret == 0);
 
   std::cout << "Local mode:            " << (opts.local_mode ? "yes" : "no") << std::endl;

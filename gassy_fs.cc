@@ -331,7 +331,7 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
     const std::vector<Block>& blks = in->blocks();
     assert(blkid < blks.size());
     const Block& b = blks[blkid];
-    storage_->read(dest, b.node, (void*)(b.addr + blkoff), done);
+    b.node->read(dest, (void*)(b.addr + blkoff), done);
 
     dest += done;
     offset += done;
@@ -993,7 +993,7 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
     const std::vector<Block>& blks = in->blocks();
     assert(blkid < blks.size());
     const Block& b = blks[blkid];
-    storage_->write(b.node, (void*)(b.addr + blkoff), (void*)src, done);
+    b.node->write((void*)(b.addr + blkoff), (void*)src, done);
 
     left -= done;
     src += done;

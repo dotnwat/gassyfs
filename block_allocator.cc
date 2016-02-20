@@ -4,18 +4,16 @@ BlockAllocator::BlockAllocator(AddressSpace *storage)
 {
   total_bytes_ = 0;
 
-  for (int i = 0; i < (int)storage->nodes.size(); i++) {
-    Node n;
-    n.addr = storage->nodes[i].segment.addr;
-    n.size = storage->nodes[i].segment.len;
-    n.curr = n.addr;
-    n.node = i;
-    nodes_.push_back(n);
-    total_bytes_ += n.size;
+  for (Node *node : storage->nodes()) {
+    NodeAlloc node_alloc;
+    node_alloc.node = node;
+    node_alloc.curr = 0;
+    total_bytes_ += node->size();
+    nodes_.push_back(node_alloc);
   }
 
   curr_node = 0;
-  num_nodes = storage->nodes.size();
+  num_nodes = nodes_.size();
   avail_bytes_ = total_bytes_;
 }
 
@@ -32,7 +30,7 @@ int BlockAllocator::GetBlock(Block *bp)
   }
 
   // node we are allocating from
-  Node& n = nodes_[curr_node];
+  NodeAlloc& n = nodes_[curr_node];
 
   Block bb;
   bb.node = n.node;
@@ -40,7 +38,7 @@ int BlockAllocator::GetBlock(Block *bp)
   bb.size = BLOCK_SIZE;
 
   n.curr += BLOCK_SIZE;
-  if (n.curr >= (n.addr + n.size))
+  if (n.curr >= n.node->size())
     return -ENOSPC;
 
   // next node to allocate from

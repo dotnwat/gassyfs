@@ -27,16 +27,14 @@ class BlockAllocator {
   uint64_t avail_bytes();
 
  private:
-  struct Node {
-    size_t addr;
-    size_t size;
+  struct NodeAlloc {
+    Node *node;
     size_t curr;
-    int node;
   };
 
   std::deque<Block> free_blks_;
   unsigned curr_node, num_nodes;
-  std::vector<Node> nodes_;
+  std::vector<NodeAlloc> nodes_;
 
   uint64_t total_bytes_;
   uint64_t avail_bytes_;

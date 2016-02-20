@@ -18,8 +18,9 @@
 
 #define BLOCK_SIZE 4096
 
+class Node;
 struct Block {
-  gasnet_node_t node;
+  Node *node;
   size_t addr;
   size_t size;
 };

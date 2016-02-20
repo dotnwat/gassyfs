@@ -4,43 +4,34 @@
 #include <sys/mman.h>
 #include <gasnet.h>
 #include <gasnet_tools.h>
-#include "common.h"
 
-int LocalAddressSpace::init(int *argc, char ***argv,
-    struct gassyfs_opts *opts)
-{
-  const size_t size = opts->heap_size << 20;
-  void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
-      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-  assert(data != MAP_FAILED);
+class GASNetNodeImpl : public Node {
+ public:
+  GASNetNodeImpl(gasnet_node_t node, void *base, uintptr_t size) :
+    node_(node), base_((char*)base), size_(size)
+  {}
 
-  Segment seg;
-  seg.addr = (size_t)data;
-  seg.len = size;
+  size_t size() {
+    return size_;
+  }
 
-  Node node;
-  node.segment = seg;
-  node.node = 0;
+  void read(void *dst, void *src, size_t len) {
+    char *abs_src = base_ + (uintptr_t)src;
+    assert((abs_src + len) < (base_ + size_));
+    gasnet_get_bulk(dst, node_, abs_src, len);
+  }
 
-  nodes.push_back(node);
+  void write(void *dst, void *src, size_t len) {
+    char *abs_dst = base_ + (uintptr_t)dst;
+    assert((abs_dst + len) < (base_ + size_));
+    gasnet_put_bulk(node_, abs_dst, src, len);
+  }
 
-  std::cout << "node-0: segment: " << nodes[0].segment.len
-    << "/" << nodes[0].segment.addr << std::endl;
-
-  opts->rank0_alloc = 1;
-
-  return 0;
-}
-
-void LocalAddressSpace::write(int node, void *dst, void *src, size_t len)
-{
-  memcpy(dst, src, len);
-}
-
-void LocalAddressSpace::read(void *dest, int node, void *src, size_t len)
-{
-  memcpy(dest, src, len);
-}
+ private:
+  gasnet_node_t node_;
+  char *base_;
+  uintptr_t size_;
+};
 
 #ifdef GASNET_SEGMENT_EVERYTHING
 
@@ -68,7 +59,7 @@ static void AM_seginfo(gasnet_token_t token, void *buf, size_t nbytes)
   gasnet_hsl_unlock(&seginfo_lock);
 }
 
-int GasnetAddressSpace::init(int *argc, char ***argv,
+int GASNetAddressSpace::init(int *argc, char ***argv,
     struct gassyfs_opts *opts)
 {
   std::cout << "gasnet segment = everything" << std::endl;
@@ -142,18 +133,14 @@ int GasnetAddressSpace::init(int *argc, char ***argv,
   assert(seginfo_done == gasnet_nodes());
 
   for (int i = 0; i < gasnet_nodes(); i++) {
-    Segment seg;
-    seg.addr = (size_t)segments[i].addr;
-    seg.len = segments[i].size;
+    gasnet_seginfo_t *s = &segments[i];
+    if (s->size == 0)
+      continue;
 
-    Node node;
-    node.segment = seg;
-    node.node = i;
+    GASNetNodeImpl *node = new GASNetNodeImpl(i,
+        s->addr, s->size);
 
-    nodes.push_back(node);
-
-    std::cout << "node-" << i << ": segment: " <<
-      segments[i].size << "/" << segments[i].addr << std::endl;
+    nodes_.push_back(node);
   }
 
   gasnet_hsl_unlock(&seginfo_lock);
@@ -162,16 +149,27 @@ int GasnetAddressSpace::init(int *argc, char ***argv,
 
   return 0;
 }
+
 #else
-int GasnetAddressSpace::init(int *argc, char ***argv,
+
+/*
+ * When GASNet is configured with segment-[fast|large] then GASNet will
+ * allocate and register memory segments automatically.
+ */
+int GASNetAddressSpace::init(int *argc, char ***argv,
     struct gassyfs_opts *opts)
 {
   std::cout << "gasnet segment = fast|large" << std::endl;
 
   GASNET_SAFE(gasnet_init(argc, argv));
 
+  // how much this rank will try to allocate
   size_t segsz = gasnet_getMaxLocalSegmentSize();
 
+  /*
+   * Rank 0 allocation can be disabled, but that configuration is overridden
+   * when there is only one node in the GASNet cluster.
+   */
   if (!opts->rank0_alloc) {
     if (gasnet_nodes() == 1)
       opts->rank0_alloc = 1;
@@ -184,6 +182,7 @@ int GasnetAddressSpace::init(int *argc, char ***argv,
   gasnet_seginfo_t segments[gasnet_nodes()];
   GASNET_SAFE(gasnet_getSegmentInfo(segments, gasnet_nodes()));
 
+  // all nodes except rank 0 can start serving memory
   if (gasnet_mynode()) {
     gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
@@ -193,41 +192,27 @@ int GasnetAddressSpace::init(int *argc, char ***argv,
   }
 
   size_t total = 0;
+  size_t num_nodes = 0;
 
   for (int i = 0; i < gasnet_nodes(); i++) {
-    Segment seg;
-    seg.addr = (size_t)segments[i].addr;
-    seg.len = segments[i].size;
+    gasnet_seginfo_t *s = &segments[i];
+    if (s->size == 0)
+      continue;
 
-    Node node;
-    node.segment = seg;
-    node.node = i;
+    GASNetNodeImpl *node = new GASNetNodeImpl(i,
+        s->addr, s->size);
 
-    nodes.push_back(node);
+    nodes_.push_back(node);
 
-    std::cout << "node-" << i << ": segment: " <<
-      segments[i].size << "/" << segments[i].addr << std::endl;
-
-    total += seg.len;
+    total += node->size();
+    num_nodes++;
   }
 
-  if (opts->rank0_alloc)
-    opts->heap_size = (total >> 20) / gasnet_nodes();
-  else
-    opts->heap_size = (total >> 20) / (gasnet_nodes()-1);
+  opts->heap_size = (total >> 20) / num_nodes;
 
   assert(gasnet_mynode() == 0);
 
   return 0;
 }
+
 #endif
-
-void GasnetAddressSpace::write(int node, void *dst, void *src, size_t len)
-{
-  gasnet_put_bulk(nodes[node].node, dst, src, len);
-}
-
-void GasnetAddressSpace::read(void *dest, int node, void *src, size_t len)
-{
-  gasnet_get_bulk(dest, nodes[node].node, src, len);
-}
