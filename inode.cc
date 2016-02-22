@@ -1,12 +1,12 @@
 #include "inode.h"
 #include <cassert>
 #include <fuse.h>
-#include "block_allocator.h"
+#include "gassy_fs.h"
 #include "common.h"
 
 Inode::Inode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
-    mode_t mode, BlockAllocator *ba) :
-    ino_set_(false), ba_(ba)
+    mode_t mode, GassyFs *fs) :
+  alloc_node(0), ino_set_(false), fs_(fs)
 {
   memset(&i_st, 0, sizeof(i_st));
 
@@ -25,9 +25,16 @@ Inode::Inode(time_t time, uid_t uid, gid_t gid, blksize_t blksize,
   i_st.st_mode = mode;
 }
 
+/*
+ * FIXME: space should be freed here, but also when it is deleted, if there
+ * are no other open file handles. Otherwise, space is only freed after the
+ * file is deleted and the kernel releases its references.
+ */
 Inode::~Inode()
 {
-  free_blocks(ba_);
+  for (auto it = extents_.begin(); it != extents_.end(); it++)
+    fs_->free_space(&it->second);
+  extents_.clear();
 }
 
 void Inode::set_ino(fuse_ino_t ino)
@@ -38,34 +45,10 @@ void Inode::set_ino(fuse_ino_t ino)
   ino_set_ = true;
 }
 
-int Inode::set_capacity(off_t size, BlockAllocator *ba)
-{
-  while ((blks_.size()*BLOCK_SIZE) < (unsigned long)size) {
-    Block b;
-    int ret = ba->GetBlock(&b);
-    if (ret)
-      return ret;
-    blks_.push_back(b);
-  }
-  return 0;
-}
-
-void Inode::free_blocks(BlockAllocator *ba)
-{
-  for (auto &blk : blks_)
-    ba->ReturnBlock(blk);
-  blks_.clear();
-}
-
 fuse_ino_t Inode::ino() const
 {
   assert(ino_set_);
   return ino_;
-}
-
-std::vector<Block>& Inode::blocks()
-{
-  return blks_;
 }
 
 bool Inode::is_directory() const

@@ -2,7 +2,8 @@
 #define GASSYFS_ADDRESS_SPACE_H_
 #include <cstddef>
 #include <vector>
-#include "common.h"
+
+struct gassyfs_opts;
 
 /*
  * A node is a single linearly addressable region that supports random read /

@@ -13,11 +13,9 @@
 #include "inode_index.h"
 #include "address_space.h"
 
-class BlockAllocator;
-
 class GassyFs {
  public:
-  GassyFs(AddressSpace *storage, BlockAllocator *ba);
+  explicit GassyFs(AddressSpace *storage);
 
   int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid);
@@ -79,18 +77,25 @@ class GassyFs {
 
   void ReleaseDir(fuse_ino_t ino);
 
+  void free_space(Extent *extent);
+
  private:
   int Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid);
   ssize_t Write(Inode::Ptr in, off_t offset, size_t size, const char *buf);
+  int allocate_space(Inode::Ptr in, off_t offset, size_t size, bool upper_bound);
 
   fuse_ino_t next_ino_;
   std::mutex mutex_;
-  BlockAllocator *ba_;
+  AddressSpace *storage_;
   struct statvfs stat;
+
+  int node_alloc_count_;
+  std::vector<NodeAlloc> node_alloc_;
 
   InodeIndex ino_refs_;
 
-  AddressSpace *storage_;
+  size_t total_bytes_;
+  size_t avail_bytes_;
 };
 
 #endif

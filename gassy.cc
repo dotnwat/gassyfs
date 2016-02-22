@@ -20,7 +20,6 @@
 
 #include "common.h"
 #include "inode.h"
-#include "block_allocator.h"
 #include "gassy_fs.h"
 #include "address_space.h"
 
@@ -534,8 +533,7 @@ int main(int argc, char *argv[])
   std::cout << std::endl;
   fflush(stdout); // FIXME: std::abc version?
 
-  BlockAllocator *ba = new BlockAllocator(storage);
-  GassyFs *fs = new GassyFs(storage, ba);
+  GassyFs *fs = new GassyFs(storage);
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {

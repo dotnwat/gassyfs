@@ -4,6 +4,7 @@
 #include <sys/mman.h>
 #include <gasnet.h>
 #include <gasnet_tools.h>
+#include "common.h"
 
 class GASNetNodeImpl : public Node {
  public:
@@ -17,13 +18,13 @@ class GASNetNodeImpl : public Node {
 
   void read(void *dst, void *src, size_t len) {
     char *abs_src = base_ + (uintptr_t)src;
-    assert((abs_src + len) < (base_ + size_));
+    assert((abs_src + len - 1) < (base_ + size_));
     gasnet_get_bulk(dst, node_, abs_src, len);
   }
 
   void write(void *dst, void *src, size_t len) {
     char *abs_dst = base_ + (uintptr_t)dst;
-    assert((abs_dst + len) < (base_ + size_));
+    assert((abs_dst + len - 1) < (base_ + size_));
     gasnet_put_bulk(node_, abs_dst, src, len);
   }
 
