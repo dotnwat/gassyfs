@@ -9,9 +9,15 @@ RUN echo "===> Install the basics..." && \
       libfuse-dev \
       build-essential \
       libacl1-dev \
+      lua5.2 \
+      liblua5.2-dev \
       pkg-config && \
     DEBIAN_FRONTEND=noninteractive apt-get install -yq \
        --reinstall linux-image-4.2.0-25-generic
+
+RUN echo "===> Cleanup apt-get..." && \
+    DEBIAN_FRONTEND=noninteractive apt-get clean && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/* /debian
 
 RUN echo "====> Make some users" && \
     groupadd fuse && \
