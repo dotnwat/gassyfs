@@ -416,6 +416,23 @@ static void ll_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
         fuse_reply_ioctl(req, 0, NULL, 0);
       }
       break;
+    case GASSY_IOC_SETLUA_ATIME:
+      {
+        struct gassy_string s;
+        memcpy(&s, in_buf, sizeof(s));
+        std::string policy(s.string);
+        GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
+        bool ret = fs->SetAtime(ino, policy);
+        fuse_reply_ioctl(req, !ret, NULL, 0);
+      }
+      break;
+    case GASSY_IOC_GETLUA_ATIME:
+      {
+        GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
+        fs->GetAtime(ino);
+        fuse_reply_ioctl(req, 0, NULL, 0);
+      }
+      break;
 
     default:
       fuse_reply_err(req, -EINVAL);

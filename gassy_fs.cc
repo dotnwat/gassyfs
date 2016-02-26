@@ -16,8 +16,6 @@
 #include <mach/mach.h>
 #endif
 
-#define LUA_ATIME "/tmp/atime.lua"
-
 #ifdef __MACH__
 static inline std::time_t time_now(void)
 {
@@ -39,8 +37,11 @@ static inline std::time_t time_now(void)
 #endif
 
 #ifdef HAVE_LUA
-int lua_policy(const char *fname)
+int lua_policy(std::string interface)
 {
+  if (interface.length() == 0)
+    return -ENOSYS;
+
   lua_State *L = NULL;
   L = luaL_newstate();
   luaL_openlibs(L);
@@ -51,10 +52,10 @@ int lua_policy(const char *fname)
     return -ENOSYS;
   }
 
-  if (luaL_dofile(L, fname) > 0) {
+  if (luaL_dostring(L, interface.c_str()) > 0) {
     std::cerr << "===> ERROR: " << lua_tostring(L, lua_gettop(L)) << "\n"; 
     std::cerr.flush();
-    return -ENOENT;
+    return -ENOSYS;
   }
 
   int ret = lua_tonumber(L, lua_gettop(L));
@@ -62,7 +63,7 @@ int lua_policy(const char *fname)
   return ret;
 }
 #else
-int lua_policy(const char *fname)
+int lua_policy(std::string interface)
 {
    return -ENOSYS;
 }
@@ -312,7 +313,7 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
 
   Inode::Ptr in = fh->in;
 
-  int ret = lua_policy(LUA_ATIME);
+  int ret = lua_policy(in->getlua_atime());
   if (ret < 0) 
     in->i_st.st_atime = time_now();
   else
@@ -1289,4 +1290,17 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
   }
 
   return size;
+}
+
+bool GassyFs::SetAtime(fuse_ino_t ino, const std::string& s)
+{
+  auto in = ino_refs_.inode(ino);
+  return in->setlua_atime(s);
+}
+
+void GassyFs::GetAtime(fuse_ino_t ino)
+{
+  auto in = ino_refs_.inode(ino);
+  in->getlua_atime();
+  std::cout.flush();
 }

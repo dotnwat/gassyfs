@@ -60,3 +60,17 @@ bool Inode::is_symlink() const
 {
   return i_st.st_mode & S_IFLNK;
 }
+
+bool Inode::setlua_atime(std::string policy)
+{
+  return lua_atime.assign(policy) == policy;
+}
+
+std::string Inode::getlua_atime()
+{
+  std::string policy = lua_atime;
+  if (!lua_atime.empty())
+    printf("atime policy: \n===\n%s===\n", lua_atime.c_str());
+  std::string ret(lua_atime.c_str());
+  return lua_atime.c_str();
+}

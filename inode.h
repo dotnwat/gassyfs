@@ -28,12 +28,16 @@ class Inode {
 
   std::map<off_t, Extent> extents_;
 
+  bool setlua_atime(std::string policy);
+  std::string getlua_atime();
+
   int alloc_node;
 
  private:
   bool ino_set_;
   fuse_ino_t ino_;
   GassyFs *fs_;
+  std::string lua_atime;
 };
 
 // TODO: specialize for regular file
