@@ -221,12 +221,15 @@ static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
   GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
   FileHandle *fh = (FileHandle*)fi->fh;
 
-  char buf[1<<20];
-  size_t new_size = std::min(size, sizeof(buf));
+  /*
+   * TODO: if this becomes a performance issue, then we can use a memory pool
+   * to keep a bunch of buffers always allocated and ready to use.
+   */
+  auto buf = std::unique_ptr<char[]>(new char[size]);
 
-  ssize_t ret = fs->Read(fh, off, new_size, buf);
+  ssize_t ret = fs->Read(fh, off, size, buf.get());
   if (ret >= 0)
-    fuse_reply_buf(req, buf, ret);
+    fuse_reply_buf(req, buf.get(), ret);
   else
     fuse_reply_err(req, -ret);
 }
