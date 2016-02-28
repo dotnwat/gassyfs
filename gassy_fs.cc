@@ -357,6 +357,8 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
   assert(it != in->extents_.end());
   off_t seg_offset = it->first;
 
+  Node::group_io_handle_t io_handle = storage_->group_io_start();
+
   while (left) {
     // size of movement this round
     size_t done = 0;
@@ -379,7 +381,8 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
         done = std::min(left, (size_t)(seg_end_offset - offset));
 
         size_t blkoff = offset - seg_offset;
-        extent.node->node->read(dst, (void*)(extent.addr + blkoff), done);
+        extent.node->node->aio_read(io_handle, dst,
+            (void*)(extent.addr + blkoff), done);
 
       } else if (++it == in->extents_.end()) {
         seg_offset = offset + left;
@@ -395,6 +398,8 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
     offset += done;
     left -= done;
   }
+
+  storage_->group_io_wait(io_handle);
 
   fh->pos += new_size;
 
@@ -1160,6 +1165,21 @@ int GassyFs::allocate_space(Inode::Ptr in, std::map<off_t, Extent>::iterator *it
   return 0;
 }
 
+class IOFinisher {
+ public:
+  IOFinisher(AddressSpace *storage, Node::group_io_handle_t io_handle) :
+    storage_(storage), io_handle_(io_handle)
+  {}
+
+  ~IOFinisher() {
+    storage_->group_io_wait(io_handle_);
+  }
+
+ private:
+  AddressSpace *storage_;
+  Node::group_io_handle_t io_handle_;
+};
+
 ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf)
 {
 #if 0
@@ -1186,6 +1206,11 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
   off_t seg_offset = it->first;
 
   size_t left = size;
+
+  Node::group_io_handle_t io_handle = storage_->group_io_start();
+
+  // raii finisher in case allocate_space returns an error
+  IOFinisher finisher(storage_, io_handle);
 
   while (left) {
     // case 1. the offset is contained in a non-allocated region before the
@@ -1225,7 +1250,7 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
         std::endl;
 #endif
 
-      extent.node->node->write(
+      extent.node->node->aio_write(io_handle,
           (void*)(extent.addr + blkoff), (void*)buf, done);
 
       buf += done;

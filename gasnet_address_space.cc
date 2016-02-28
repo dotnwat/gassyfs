@@ -28,11 +28,44 @@ class GASNetNodeImpl : public Node {
     gasnet_put_bulk(node_, abs_dst, src, len);
   }
 
+  void aio_read(group_io_handle_t handle, void *dst, void *src, size_t len) {
+    char *abs_src = base_ + (uintptr_t)src;
+    assert((abs_src + len - 1) < (base_ + size_));
+    gasnet_handle_t h = gasnet_get_nb_bulk(dst, node_, abs_src, len);
+    auto handles = static_cast<std::vector<gasnet_handle_t>*>(handle);
+    handles->push_back(h);
+  }
+
+  void aio_write(group_io_handle_t handle, void *dst, void *src, size_t len) {
+    char *abs_dst = base_ + (uintptr_t)dst;
+    assert((abs_dst + len - 1) < (base_ + size_));
+    gasnet_handle_t h = gasnet_put_nb_bulk(node_, abs_dst, src, len);
+    auto handles = static_cast<std::vector<gasnet_handle_t>*>(handle);
+    handles->push_back(h);
+  }
+
  private:
   gasnet_node_t node_;
   char *base_;
   uintptr_t size_;
 };
+
+
+Node::group_io_handle_t GASNetAddressSpace::group_io_start()
+{
+  auto handles = new std::vector<gasnet_handle_t>;
+  handles->reserve(4);
+  return handles;
+}
+
+void GASNetAddressSpace::group_io_wait(Node::group_io_handle_t handle)
+{
+  auto handles = static_cast<std::vector<gasnet_handle_t>*>(handle);
+  size_t num_handles = handles->size();
+  if (num_handles)
+    gasnet_wait_syncnb_all(handles->data(), num_handles);
+  delete handles;
+}
 
 #ifdef GASNET_SEGMENT_EVERYTHING
 
