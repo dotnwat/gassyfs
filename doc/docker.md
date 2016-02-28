@@ -10,38 +10,38 @@ Quickstart
 
 Start the container with networking/device privileges and ssh keys:
 
-    ```bash
-    docker run \
-      --name gassyfs \
-      -d \
-      --net=host \
-      -e SSHD_PORT=2222 \
-      -e AUTHORIZED_KEYS="`cat ~/.ssh/id_rsa.pub`" \
-      --privileged \
-      -v <PATH-TO-GASSYFS-SRC>/:/gassyfs \
-      michaelsevilla/gassyfs 
-    ```
+```bash
+docker run \
+  --name gassyfs \
+  -d \
+  --net=host \
+  -e SSHD_PORT=2222 \
+  -e AUTHORIZED_KEYS="`cat ~/.ssh/id_rsa.pub`" \
+  --privileged \
+  -v <PATH-TO-GASSYFS-SRC>/:/gassyfs \
+  michaelsevilla/gassyfs
+```
 
 Build GassyFS:
 
-    ```bash
-    cd /gassyfs
-    ci/build.sh
-    ```
+```bash
+cd /gassyfs
+ci/build.sh
+```
 
 Run the POSIX tests:
 
-    ```bash
-    cd /gassyfs
-    ci/test.sh
-    ```
+```bash
+cd /gassyfs
+ci/test.sh
+```
 
 Build
 =====
 
 From outside the container:
 
-    ```bash
-    cd gassyfs/docker
-    docker build -t <MYNAME>/gassyfs
-    ```
+```bash
+cd gassyfs/docker
+docker build -t <MYNAME>/gassyfs
+```
