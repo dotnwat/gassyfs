@@ -34,7 +34,7 @@ mkdir mount
 if [ "$USE_LOCAL_MODE" = "1" ]; then
   ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc -o local_mode -o heap_size=1024 &
 else
-  SSH_SERVERS="localhost" /usr/local/bin/amudprun -np 1 ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc &
+  SSH_SERVERS="localhost localhost" /usr/local/bin/amudprun -np 2 ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc -o rank0_alloc &
 fi
 sleep 5
 mount
