@@ -1022,17 +1022,20 @@ int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
     in->extents_.clear();
     in->i_st.st_size = 0;
 
-  // shrink file
-  } else if (in->i_st.st_size > newsize) {
-
+  // shrink file. the basic strategy is to free all extents past newsize
+  // offset. we have to be careful if newsize falls into an extent and not
+  // free that extent.
+  } else if (newsize < in->i_st.st_size) {
     // find extent that could intersect newsize
     auto it = in->extents_.upper_bound(newsize);
     if (it != in->extents_.begin()) {
       assert(!in->extents_.empty());
       --it;
     } else if (it == in->extents_.end()) {
-      // empty: could happen if truncate big then small without causing any
-      // space to actually be allocated (i.e. performing no writes).
+      // empty: this case could happen if a file was truncated to be large,
+      // then truncated to be small without the file having any space
+      // allocated to it (i.e. no writes were performed). in this case we can
+      // just set the file size (zero fill happens during read).
       in->i_st.st_size = newsize;
       return 0;
     }
@@ -1040,7 +1043,11 @@ int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
     assert(it != in->extents_.end());
     off_t extent_offset = it->first;
 
-    if (newsize < extent_offset) {
+    // newsize lands before the extent, so this extent and all extents after
+    // it can be freed. if newsize falls within a hole, then zero fill will be
+    // handled correctly during read. if newsize == extent_offset then the
+    // actual last byte falls before the extent and we still remove it.
+    if (newsize <= extent_offset) {
       for (auto it2 = it; it2 != in->extents_.end(); it2++) {
         free_space(&it2->second);
       }
@@ -1064,7 +1071,10 @@ int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
 
     return 0;
 
-  // expand file with zeros
+  // expand file with zeros. the basic strategy here is create a big hole
+  // after the end of the file which will be zero filled during read. if the
+  // current end of file lands in an extent, then zero fill that because read
+  // can't tell if allocated space is part of that "hole".
   } else {
     assert(in->i_st.st_size < newsize);
 
@@ -1089,7 +1099,7 @@ int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
     const auto& extent = it->second;
     off_t extent_end = extent_offset + extent.length;
 
-    if (in->i_st.st_size > extent_end) {
+    if (extent_end < in->i_st.st_size) {
       in->i_st.st_size = newsize;
       return 0;
     }
