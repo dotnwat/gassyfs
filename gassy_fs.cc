@@ -1005,34 +1005,105 @@ void GassyFs::free_space(Extent *extent)
 
 int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
 {
+  // easy: nothing to do
   if (in->i_st.st_size == newsize) {
     return 0;
-  } else if (in->i_st.st_size > newsize) {
-    while (!in->extents_.empty()) {
-      auto it = in->extents_.end();
-      --it;
-      off_t offset = it->first;
-      Extent& extent = it->second;
-      if ((offset + (off_t)extent.length) < (off_t)newsize)
-        break;
-      if (offset <= (off_t)newsize && (off_t)newsize < (offset + (off_t)extent.length))
-        break;
-      free_space(&extent);
-      in->extents_.erase(it);
+
+  // easy: free all extents
+  } else if (newsize == 0) {
+    for (auto& it : in->extents_) {
+      free_space(&it.second);
     }
+    in->extents_.clear();
+    in->i_st.st_size = 0;
+
+  // shrink file
+  } else if (in->i_st.st_size > newsize) {
+
+    // find extent that could intersect newsize
+    auto it = in->extents_.upper_bound(newsize);
+    if (it != in->extents_.begin()) {
+      assert(!in->extents_.empty());
+      --it;
+    } else if (it == in->extents_.end()) {
+      // empty: could happen if truncate big then small without causing any
+      // space to actually be allocated (i.e. performing no writes).
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    assert(it != in->extents_.end());
+    off_t extent_offset = it->first;
+
+    if (newsize < extent_offset) {
+      for (auto it2 = it; it2 != in->extents_.end(); it2++) {
+        free_space(&it2->second);
+      }
+      in->extents_.erase(it, in->extents_.end());
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    const auto& extent = it->second;
+    off_t extent_end = extent_offset + extent.length;
+
+    if (newsize <= extent_end)
+      it++;
+
+    for (auto it2 = it; it2 != in->extents_.end(); it2++) {
+      free_space(&it2->second);
+    }
+
+    in->extents_.erase(it, in->extents_.end());
     in->i_st.st_size = newsize;
+
+    return 0;
+
+  // expand file with zeros
   } else {
+    assert(in->i_st.st_size < newsize);
+
+    // find extent that could intersect newsize
+    auto it = in->extents_.upper_bound(in->i_st.st_size);
+    if (it != in->extents_.begin()) {
+      assert(!in->extents_.empty());
+      assert(it == in->extents_.end());
+      --it;
+    } else if (it == in->extents_.end()) {
+      // empty: could happen with small truncate then large truncate having
+      // not yet allocated any space (i.e. no writes).
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    assert(it != in->extents_.end());
+    off_t extent_offset = it->first;
+
+    assert(in->i_st.st_size >= extent_offset);
+
+    const auto& extent = it->second;
+    off_t extent_end = extent_offset + extent.length;
+
+    if (in->i_st.st_size > extent_end) {
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    size_t left = std::min(extent_end - in->i_st.st_size,
+        newsize - in->i_st.st_size);
+    assert(left);
+
     char zeros[4096];
     memset(zeros, 0, sizeof(zeros));
-    while (in->i_st.st_size < newsize) {
-      ssize_t ret = Write(in, in->i_st.st_size,
-          sizeof(zeros), zeros);
+
+    while (left) {
+      size_t done = std::min(left, sizeof(zeros));
+      ssize_t ret = Write(in, in->i_st.st_size, done, zeros);
       assert(ret > 0);
+      left -= ret;
     }
-    if (in->i_st.st_size > newsize)
-      return Truncate(in, newsize, uid, gid);
-    else
-      assert(in->i_st.st_size == newsize);
+
+    in->i_st.st_size = newsize;
   }
 
   return 0;
