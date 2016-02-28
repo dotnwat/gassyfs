@@ -82,7 +82,8 @@ class GassyFs {
  private:
   int Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid);
   ssize_t Write(Inode::Ptr in, off_t offset, size_t size, const char *buf);
-  int allocate_space(Inode::Ptr in, off_t offset, size_t size, bool upper_bound);
+  int allocate_space(Inode::Ptr in, std::map<off_t, Extent>::iterator *it,
+      off_t offset, size_t size, bool upper_bound);
 
   fuse_ino_t next_ino_;
   std::mutex mutex_;

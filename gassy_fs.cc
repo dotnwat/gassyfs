@@ -1113,7 +1113,8 @@ int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
  * Allocate storage space for a file. The space should be available at file
  * offset @offset, and be no larger than @size bytes.
  */
-int GassyFs::allocate_space(Inode::Ptr in, off_t offset, size_t size, bool upper_bound)
+int GassyFs::allocate_space(Inode::Ptr in, std::map<off_t, Extent>::iterator *it,
+    off_t offset, size_t size, bool upper_bound)
 {
 #if 0
   std::cout << "alloc: offset=" << offset << " size=" << size << " upper_bound="
@@ -1152,9 +1153,9 @@ int GassyFs::allocate_space(Inode::Ptr in, off_t offset, size_t size, bool upper
     std::endl;
 #endif
 
-  // insert extent into inode allocation table
-  assert(in->extents_.find(offset) == in->extents_.end());
-  in->extents_[offset] = extent;
+  auto ret = in->extents_.insert(std::make_pair(offset, extent));
+  assert(ret.second);
+  *it = ret.first;
 
   return 0;
 }
@@ -1176,12 +1177,9 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
     --it;
   } else if (it == in->extents_.end()) {
     assert(in->extents_.empty());
-    int ret = allocate_space(in, offset, size, false);
+    int ret = allocate_space(in, &it, offset, size, false);
     if (ret)
       return ret;
-    assert(!in->extents_.empty());
-    it = in->extents_.begin();
-    assert(it->first == offset);
   }
 
   assert(it != in->extents_.end());
@@ -1200,12 +1198,10 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
         " upper_bound=true"
         << std::endl;
 #endif
-      int ret = allocate_space(in, offset, seg_offset - offset, true);
+      int ret = allocate_space(in, &it, offset, seg_offset - offset, true);
       if (ret)
         return ret;
 
-      it = in->extents_.find(offset);
-      assert(it != in->extents_.end());
       seg_offset = it->first;
 
       continue;
@@ -1244,12 +1240,10 @@ ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf
     // case 3. the offset falls past the extent, and there are no more
     // extents. in this case we extend the file allocation.
     if (++it == in->extents_.end()) {
-      int ret = allocate_space(in, offset, left, false);
+      int ret = allocate_space(in, &it, offset, left, false);
       if (ret)
         return ret;
 
-      it = in->extents_.find(offset);
-      assert(it != in->extents_.end());
       seg_offset = it->first;
 
       continue;
