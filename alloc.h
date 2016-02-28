@@ -12,46 +12,6 @@
 #include <map>
 #include <errno.h>
 
-#if 0
-class Allocator {
- public:
-  explicit Allocator(size_t size) {
-    size_t usage = 0;
-    off_t offset = 0;
-    for (;;) {
-      AllocBlock block = { offset, 4096 };
-      usage += block.size;
-      if (usage > size)
-        break;
-      blocks_.push_back(block);
-      offset += block.size;
-    }
-  }
-
-  off_t alloc(size_t size) {
-    if (blocks_.empty())
-      return -ENOMEM;
-    AllocBlock block = blocks_.back();
-    blocks_.pop_back();
-    return block.offset;
-  }
-
-  void free(off_t offset, size_t size) {
-    AllocBlock block = { offset, 4096 };
-    blocks_.push_back(block);
-  }
-
- private:
-  struct AllocBlock {
-    off_t offset;
-    size_t size;
-  };
-
-  std::deque<AllocBlock> blocks_;
-};
-
-#else
-
 class Allocator {
  public:
   explicit Allocator(size_t size) {
@@ -172,6 +132,5 @@ class Allocator {
   size_t alignment;
   std::map<off_t, off_t> free_blocks;
 };
-#endif
 
 #endif

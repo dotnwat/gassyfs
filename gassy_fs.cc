@@ -1124,23 +1124,26 @@ int GassyFs::allocate_space(Inode::Ptr in, off_t offset, size_t size, bool upper
   NodeAlloc *na = &node_alloc_[in->alloc_node];
   in->alloc_node = ++in->alloc_node % node_alloc_count_;
 
+  // cap allocation size at 1mb, and if it isn't just filling a hole, then
+  // make sure there is a lower bound on allocation size.
+  size = std::min(size, (size_t)(1ULL<<20));
+  if (!upper_bound)
+    size = std::max(size, (size_t)8192);
+
   // allocate some space in the target node
-  off_t alloc_offset = na->alloc->alloc(4096);
+  off_t alloc_offset = na->alloc->alloc(size);
   if (alloc_offset == -ENOMEM)
     return -ENOSPC;
   assert(alloc_offset >= 0);
 
-  avail_bytes_ -= 4096;
+  avail_bytes_ -= size;
 
   // construct extent
   Extent extent;
-  if (upper_bound)
-    extent.length = std::min(size, (size_t)4096);
-  else
-    extent.length = 4096;
+  extent.length = size;
   extent.node = na;
   extent.addr = alloc_offset;
-  extent.size = 4096;
+  extent.size = size;
 
 #if 0
   std::cout << "   alloc extent: length=" << extent.length <<
