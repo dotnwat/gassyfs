@@ -11,6 +11,10 @@ RUN echo "===> Install the basics..." && \
       libacl1-dev \
       lua5.2 \
       liblua5.2-dev \
+      samtools \
+      libexpat1-dev \
+      libcurl4-openssl-dev \
+      gettext \
       pkg-config && \
     DEBIAN_FRONTEND=noninteractive apt-get install -yq \
        --reinstall linux-image-4.2.0-25-generic

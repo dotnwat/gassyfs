@@ -18,8 +18,15 @@ docker run \
   -e SSHD_PORT=2222 \
   -e AUTHORIZED_KEYS="`cat ~/.ssh/id_rsa.pub`" \
   --privileged \
+  -v /dev/shm:/dev/shm -v /run/shm:/run/shm \
   -v <PATH-TO-GASSYFS-SRC>/:/gassyfs \
   michaelsevilla/gassyfs
+```
+
+Go inside the container:
+
+```bash
+ssh -p 2222 root@localhost
 ```
 
 Build GassyFS:
@@ -43,5 +50,5 @@ From outside the container:
 
 ```bash
 cd gassyfs/docker
-docker build -t <MYNAME>/gassyfs
+docker build -t michaelsevilla/gassyfs
 ```
