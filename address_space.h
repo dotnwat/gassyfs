@@ -2,39 +2,71 @@
 #define GASSYFS_ADDRESS_SPACE_H_
 #include <cstddef>
 #include <vector>
-#include "common.h"
 
-class AddressSpace {
+struct gassyfs_opts;
+
+/*
+ * A node is a single linearly addressable region that supports random read /
+ * write operations (e.g. a GASNet node). The address space exposed by a node
+ * is physically located on a single host.
+ */
+class Node {
  public:
-  struct Segment {
-    size_t addr;
-    size_t len;
-  };
+  typedef void* group_io_handle_t;
 
-  struct Node {
-    Segment segment;
-    int node;
-  };
+  // valid address space: [0, size)
+  virtual size_t size() = 0;
 
-  virtual int init(int *argc, char ***argv, struct gassyfs_opts *opts) = 0;
-  virtual void write(int node, void *dst, void *src, size_t len) = 0;
-  virtual void read(void *dest, int node, void *src, size_t len) = 0;
+  // synchronous
+  virtual void read(void *dst, void *src, size_t len) = 0;
+  virtual void write(void *dst, void *src, size_t len) = 0;
 
-  std::vector<Node> nodes;
+  virtual void aio_read(group_io_handle_t handle, void *dst,
+      void *src, size_t len) = 0;
+  virtual void aio_write(group_io_handle_t handle, void *dst,
+      void *src, size_t len) = 0;
 };
 
-class GasnetAddressSpace : public AddressSpace {
+/*
+ * An address space is a set of nodes.
+ */
+class AddressSpace {
  public:
-  virtual int init(int *argc, char ***argv, struct gassyfs_opts *opts);
-  virtual void write(int node, void *dst, void *src, size_t len);
-  virtual void read(void *dest, int node, void *src, size_t len);
+  virtual std::vector<Node*>& nodes() = 0;
+
+  // aio
+  virtual Node::group_io_handle_t group_io_start() = 0;
+  virtual void group_io_wait(Node::group_io_handle_t handle) = 0;
 };
 
 class LocalAddressSpace : public AddressSpace {
  public:
-  virtual int init(int *argc, char ***argv, struct gassyfs_opts *opts);
-  virtual void write(int node, void *dst, void *src, size_t len);
-  virtual void read(void *dest, int node, void *src, size_t len);
+  int init(struct gassyfs_opts *opts);
+
+  std::vector<Node*>& nodes() {
+    return nodes_;
+  }
+
+  Node::group_io_handle_t group_io_start();
+  void group_io_wait(Node::group_io_handle_t handle);
+
+ private:
+  std::vector<Node*> nodes_;
+};
+
+class GASNetAddressSpace : public AddressSpace {
+ public:
+  int init(int *argc, char ***argv, struct gassyfs_opts *opts);
+
+  std::vector<Node*>& nodes() {
+    return nodes_;
+  }
+
+  Node::group_io_handle_t group_io_start();
+  void group_io_wait(Node::group_io_handle_t handle);
+
+ private:
+  std::vector<Node*> nodes_;
 };
 
 #endif

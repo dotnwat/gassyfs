@@ -1,11 +1,11 @@
 #include "gassy_fs.h"
+#include <algorithm>
 #include <cassert>
 #include <cstring>
 #include <iostream>
 #include <string>
 #include <time.h>
 #include "inode.h"
-#include "block_allocator.h"
 
 #ifdef HAVE_LUA
 #include <lua.hpp>
@@ -68,25 +68,34 @@ int lua_policy(const char *fname)
 }
 #endif
 
-GassyFs::GassyFs(AddressSpace *storage, BlockAllocator *ba) :
-  next_ino_(FUSE_ROOT_ID + 1), ba_(ba), storage_(storage)
+GassyFs::GassyFs(AddressSpace *storage) :
+  next_ino_(FUSE_ROOT_ID + 1), storage_(storage)
 {
   std::time_t now = time_now();
 
   auto root = std::make_shared<DirInode>(now,
-      getuid(), getgid(), 4096, 0755, ba_);
+      getuid(), getgid(), 4096, 0755, this);
 
   root->set_ino(FUSE_ROOT_ID);
 
   // bump kernel inode cache reference count
   ino_refs_.add(root);
 
+  total_bytes_ = 0;
+  for (Node *node : storage_->nodes()) {
+    NodeAlloc na(node);
+    node_alloc_.push_back(na);
+    total_bytes_ += node->size();
+  }
+  avail_bytes_ = total_bytes_;
+  node_alloc_count_ = node_alloc_.size();
+
   memset(&stat, 0, sizeof(stat));
   stat.f_fsid = 983983;
   stat.f_namemax = PATH_MAX;
   stat.f_bsize = 4096;
   stat.f_frsize = 4096;
-  stat.f_blocks = ba_->total_bytes() / 4096;
+  stat.f_blocks = total_bytes_ / 4096;
   stat.f_files = 0;
   stat.f_bfree = stat.f_blocks;
   stat.f_bavail = stat.f_blocks;
@@ -100,7 +109,7 @@ int GassyFs::Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
 
   std::time_t now = time_now();
 
-  auto in = std::make_shared<Inode>(now, uid, gid, 4096, S_IFREG | mode, ba_);
+  auto in = std::make_shared<Inode>(now, uid, gid, 4096, S_IFREG | mode, this);
   auto fh = std::unique_ptr<FileHandle>(new FileHandle(in, flags));
 
   std::lock_guard<std::mutex> l(mutex_);
@@ -309,38 +318,92 @@ ssize_t GassyFs::Read(FileHandle *fh, off_t offset,
   else
     in->i_st.st_atime = ret;
 
-  // reading past eof returns nothing
+  // reads that start past eof return nothing
   if (offset >= in->i_st.st_size || size == 0)
     return 0;
 
-  // read up until eof
+  // clip the read so that it doesn't pass eof
   size_t left;
   if ((off_t)(offset + size) > in->i_st.st_size)
     left = in->i_st.st_size - offset;
   else
     left = size;
 
-  const size_t new_n = left;
+  const size_t new_size = left;
+  char *dst = buf;
 
-  char *dest = buf;
-  while (left != 0) {
-    size_t blkid = offset / BLOCK_SIZE;
-    size_t blkoff = offset % BLOCK_SIZE;
-    size_t done = std::min(left, BLOCK_SIZE-blkoff);
+  /*
+   * find first segment that might intersect the read
+   *
+   * upper_bound(offset) will return a pointer to the first segment whose
+   * offset is greater (>) than the target offset. Thus, the immediately
+   * preceeding segment is the first that has an offset less than or equal to
+   * (<=) the offset which is what we are interested in.
+   *
+   * 1) it == begin(): can't move backward
+   * 2) it == end() / other: <= case described above
+   */
+  auto it = in->extents_.upper_bound(offset);
+  if (it != in->extents_.begin()) { // not empty
+    assert(!in->extents_.empty());
+    --it;
+  } else if (it == in->extents_.end()) { // empty
+    assert(in->extents_.empty());
+    memset(dst, 0, new_size);
+    fh->pos += new_size;
+    return new_size;
+  }
 
-    const std::vector<Block>& blks = in->blocks();
-    assert(blkid < blks.size());
-    const Block& b = blks[blkid];
-    storage_->read(dest, b.node, (void*)(b.addr + blkoff), done);
+  assert(it != in->extents_.end());
+  off_t seg_offset = it->first;
 
-    dest += done;
+  Node::group_io_handle_t io_handle = storage_->group_io_start();
+
+  while (left) {
+    // size of movement this round
+    size_t done = 0;
+
+    // read starts before the current segment. return zeros up until the
+    // beginning of the segment or until we've completed the read.
+    if (offset < seg_offset) {
+      done = std::min(left, (size_t)(seg_offset - offset));
+      memset(dst, 0, done);
+    } else {
+      const auto& extent = it->second;
+      off_t seg_end_offset = seg_offset + extent.length;
+
+      // fixme: there may be a case here where the end of file lands inside an
+      // allocated extent, but logically it shoudl be returning zeros
+
+      // read starts within the current segment. return valid data up until
+      // the end of the segment or until we've completed the read.
+      if (offset < seg_end_offset) {
+        done = std::min(left, (size_t)(seg_end_offset - offset));
+
+        size_t blkoff = offset - seg_offset;
+        extent.node->node->aio_read(io_handle, dst,
+            (void*)(extent.addr + blkoff), done);
+
+      } else if (++it == in->extents_.end()) {
+        seg_offset = offset + left;
+        assert(offset < seg_offset);
+        // assert that we'll be done
+        continue;
+      } else {
+        seg_offset = it->first;
+        continue;
+      }
+    }
+    dst += done;
     offset += done;
     left -= done;
   }
 
-  fh->pos += new_n;
+  storage_->group_io_wait(io_handle);
 
-  return new_n;
+  fh->pos += new_size;
+
+  return new_size;
 }
 
 int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
@@ -351,7 +414,7 @@ int GassyFs::Mkdir(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
 
   std::time_t now = time_now();
 
-  auto in = std::make_shared<DirInode>(now, uid, gid, 4096, mode, ba_);
+  auto in = std::make_shared<DirInode>(now, uid, gid, 4096, mode, this);
 
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -638,7 +701,7 @@ int GassyFs::Symlink(const std::string& link, fuse_ino_t parent_ino,
 
   std::time_t now = time_now();
 
-  auto in = std::make_shared<SymlinkInode>(now, uid, gid, 4096, link, ba_);
+  auto in = std::make_shared<SymlinkInode>(now, uid, gid, 4096, link, this);
 
   std::lock_guard<std::mutex> l(mutex_);
 
@@ -689,8 +752,8 @@ int GassyFs::Statfs(fuse_ino_t ino, struct statvfs *stbuf)
   (void)in;
 
   stat.f_files = ino_refs_.nfiles();
-  stat.f_bfree = ba_->avail_bytes() / 4096;
-  stat.f_bavail = ba_->avail_bytes() / 4096;
+  stat.f_bfree = avail_bytes_ / 4096;
+  stat.f_bavail = avail_bytes_ / 4096;
 
   *stbuf = stat;
 
@@ -820,7 +883,7 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
 
   std::time_t now = time_now();
 
-  auto in = std::make_shared<Inode>(now, uid, gid, 4096, mode, ba_);
+  auto in = std::make_shared<Inode>(now, uid, gid, 4096, mode, this);
 
   // directories start with nlink = 2, but according to mknod(2), "Under
   // Linux, mknod() cannot be used to create directories.  One should make
@@ -939,68 +1002,291 @@ ssize_t GassyFs::ReadDir(fuse_req_t req, fuse_ino_t ino, char *buf,
 
 void GassyFs::ReleaseDir(fuse_ino_t ino) {}
 
+void GassyFs::free_space(Extent *extent)
+{
+  extent->node->alloc->free(extent->addr, extent->size);
+  avail_bytes_ += extent->size;
+}
+
 int GassyFs::Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid)
 {
+  // easy: nothing to do
   if (in->i_st.st_size == newsize) {
     return 0;
-  } else if (in->i_st.st_size > newsize) {
-    std::vector<Block>& blks = in->blocks();
-    size_t blkid = newsize / BLOCK_SIZE;
-    assert(blkid < blks.size());
-    for (size_t i = blks.size() - 1; i > blkid; --i) {
-      Block blk = blks.back();
-      ba_->ReturnBlock(blk);
-      blks.pop_back();
+
+  // easy: free all extents
+  } else if (newsize == 0) {
+    for (auto& it : in->extents_) {
+      free_space(&it.second);
     }
-    assert(blkid == (blks.size() - 1));
+    in->extents_.clear();
+    in->i_st.st_size = 0;
+
+  // shrink file. the basic strategy is to free all extents past newsize
+  // offset. we have to be careful if newsize falls into an extent and not
+  // free that extent.
+  } else if (newsize < in->i_st.st_size) {
+    // find extent that could intersect newsize
+    auto it = in->extents_.upper_bound(newsize);
+    if (it != in->extents_.begin()) {
+      assert(!in->extents_.empty());
+      --it;
+    } else if (it == in->extents_.end()) {
+      // empty: this case could happen if a file was truncated to be large,
+      // then truncated to be small without the file having any space
+      // allocated to it (i.e. no writes were performed). in this case we can
+      // just set the file size (zero fill happens during read).
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    assert(it != in->extents_.end());
+    off_t extent_offset = it->first;
+
+    // newsize lands before the extent, so this extent and all extents after
+    // it can be freed. if newsize falls within a hole, then zero fill will be
+    // handled correctly during read. if newsize == extent_offset then the
+    // actual last byte falls before the extent and we still remove it.
+    if (newsize <= extent_offset) {
+      for (auto it2 = it; it2 != in->extents_.end(); it2++) {
+        free_space(&it2->second);
+      }
+      in->extents_.erase(it, in->extents_.end());
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    const auto& extent = it->second;
+    off_t extent_end = extent_offset + extent.length;
+
+    if (newsize <= extent_end)
+      it++;
+
+    for (auto it2 = it; it2 != in->extents_.end(); it2++) {
+      free_space(&it2->second);
+    }
+
+    in->extents_.erase(it, in->extents_.end());
     in->i_st.st_size = newsize;
+
+    return 0;
+
+  // expand file with zeros. the basic strategy here is create a big hole
+  // after the end of the file which will be zero filled during read. if the
+  // current end of file lands in an extent, then zero fill that because read
+  // can't tell if allocated space is part of that "hole".
   } else {
+    assert(in->i_st.st_size < newsize);
+
+    // find extent that could intersect newsize
+    auto it = in->extents_.upper_bound(in->i_st.st_size);
+    if (it != in->extents_.begin()) {
+      assert(!in->extents_.empty());
+      assert(it == in->extents_.end());
+      --it;
+    } else if (it == in->extents_.end()) {
+      // empty: could happen with small truncate then large truncate having
+      // not yet allocated any space (i.e. no writes).
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    assert(it != in->extents_.end());
+    off_t extent_offset = it->first;
+
+    assert(in->i_st.st_size >= extent_offset);
+
+    const auto& extent = it->second;
+    off_t extent_end = extent_offset + extent.length;
+
+    if (extent_end < in->i_st.st_size) {
+      in->i_st.st_size = newsize;
+      return 0;
+    }
+
+    size_t left = std::min(extent_end - in->i_st.st_size,
+        newsize - in->i_st.st_size);
+    assert(left);
+
     char zeros[4096];
     memset(zeros, 0, sizeof(zeros));
-    while (in->i_st.st_size < newsize) {
-      ssize_t ret = Write(in, in->i_st.st_size,
-          sizeof(zeros), zeros);
+
+    while (left) {
+      size_t done = std::min(left, sizeof(zeros));
+      ssize_t ret = Write(in, in->i_st.st_size, done, zeros);
       assert(ret > 0);
+      left -= ret;
     }
-    if (in->i_st.st_size > newsize)
-      return Truncate(in, newsize, uid, gid);
-    else
-      assert(in->i_st.st_size == newsize);
+
+    in->i_st.st_size = newsize;
   }
 
   return 0;
 }
 
+/*
+ * Allocate storage space for a file. The space should be available at file
+ * offset @offset, and be no larger than @size bytes.
+ */
+int GassyFs::allocate_space(Inode::Ptr in, std::map<off_t, Extent>::iterator *it,
+    off_t offset, size_t size, bool upper_bound)
+{
+#if 0
+  std::cout << "alloc: offset=" << offset << " size=" << size << " upper_bound="
+    << upper_bound << std::endl;
+#endif
+
+  // select a target node from which to allocate space
+  NodeAlloc *na = &node_alloc_[in->alloc_node];
+  in->alloc_node = ++in->alloc_node % node_alloc_count_;
+
+  // cap allocation size at 1mb, and if it isn't just filling a hole, then
+  // make sure there is a lower bound on allocation size.
+  size = std::min(size, (size_t)(1ULL<<20));
+  if (!upper_bound)
+    size = std::max(size, (size_t)8192);
+
+  // allocate some space in the target node
+  off_t alloc_offset = na->alloc->alloc(size);
+  if (alloc_offset == -ENOMEM)
+    return -ENOSPC;
+  assert(alloc_offset >= 0);
+
+  avail_bytes_ -= size;
+
+  // construct extent
+  Extent extent;
+  extent.length = size;
+  extent.node = na;
+  extent.addr = alloc_offset;
+  extent.size = size;
+
+#if 0
+  std::cout << "   alloc extent: length=" << extent.length <<
+    " addr=" << extent.addr <<
+    " size=" << extent.size <<
+    std::endl;
+#endif
+
+  auto ret = in->extents_.insert(std::make_pair(offset, extent));
+  assert(ret.second);
+  *it = ret.first;
+
+  return 0;
+}
+
+class IOFinisher {
+ public:
+  IOFinisher(AddressSpace *storage, Node::group_io_handle_t io_handle) :
+    storage_(storage), io_handle_(io_handle)
+  {}
+
+  ~IOFinisher() {
+    storage_->group_io_wait(io_handle_);
+  }
+
+ private:
+  AddressSpace *storage_;
+  Node::group_io_handle_t io_handle_;
+};
+
 ssize_t GassyFs::Write(Inode::Ptr in, off_t offset, size_t size, const char *buf)
 {
-  int ret = in->set_capacity(offset + size, ba_);
-  if (ret)
-    return ret;
+#if 0
+  std::cout << "write: offset=" << offset << " size=" << size << std::endl;
+#endif
 
   std::time_t now = time_now();
   in->i_st.st_ctime = now;
   in->i_st.st_mtime = now;
 
-  const off_t orig_offset = offset;
-  const char *src = buf;
-
-  size_t left = size;
-  while (left != 0) {
-    size_t blkid = offset / BLOCK_SIZE;
-    size_t blkoff = offset % BLOCK_SIZE;
-    size_t done = std::min(left, BLOCK_SIZE-blkoff);
-
-    const std::vector<Block>& blks = in->blocks();
-    assert(blkid < blks.size());
-    const Block& b = blks[blkid];
-    storage_->write(b.node, (void*)(b.addr + blkoff), (void*)src, done);
-
-    left -= done;
-    src += done;
-    offset += done;
+  // find the first extent that could intersect the write
+  auto it = in->extents_.upper_bound(offset);
+  if (it != in->extents_.begin()) {
+    assert(!in->extents_.empty());
+    --it;
+  } else if (it == in->extents_.end()) {
+    assert(in->extents_.empty());
+    int ret = allocate_space(in, &it, offset, size, false);
+    if (ret)
+      return ret;
   }
 
-  in->i_st.st_size = std::max(in->i_st.st_size, orig_offset + (off_t)size);
+  assert(it != in->extents_.end());
+  off_t seg_offset = it->first;
+
+  size_t left = size;
+
+  Node::group_io_handle_t io_handle = storage_->group_io_start();
+
+  // raii finisher in case allocate_space returns an error
+  IOFinisher finisher(storage_, io_handle);
+
+  while (left) {
+    // case 1. the offset is contained in a non-allocated region before the
+    // extent. allocate some space starting at the target offset that doesn't
+    // extend past the beginning of the extent.
+    if (offset < seg_offset) {
+#if 0
+      std::cout << "write:case1: offset=" << offset <<
+        " size=" << (seg_offset - offset) <<
+        " upper_bound=true"
+        << std::endl;
+#endif
+      int ret = allocate_space(in, &it, offset, seg_offset - offset, true);
+      if (ret)
+        return ret;
+
+      seg_offset = it->first;
+
+      continue;
+    }
+
+    const auto& extent = it->second;
+    off_t seg_end_offset = seg_offset + extent.length;
+
+    // case 2. the offset falls within the current extent: write data
+    if (offset < seg_end_offset) {
+      size_t done = std::min(left, (size_t)(seg_end_offset - offset));
+      size_t blkoff = offset - seg_offset;
+
+#if 0
+      std::cout << "write:case2: " <<
+        " offset=" << offset <<
+        " seg_offset=" << seg_offset <<
+        " blkoff=" << blkoff <<
+        " done=" << done <<
+        " dst=" << (extent.addr + blkoff) <<
+        std::endl;
+#endif
+
+      extent.node->node->aio_write(io_handle,
+          (void*)(extent.addr + blkoff), (void*)buf, done);
+
+      buf += done;
+      offset += done;
+      left -= done;
+
+      in->i_st.st_size = std::max(in->i_st.st_size, offset);
+
+      continue;
+    }
+
+    // case 3. the offset falls past the extent, and there are no more
+    // extents. in this case we extend the file allocation.
+    if (++it == in->extents_.end()) {
+      int ret = allocate_space(in, &it, offset, left, false);
+      if (ret)
+        return ret;
+
+      seg_offset = it->first;
+
+      continue;
+    }
+
+    // case 4. try the next extent
+    seg_offset = it->first;
+  }
 
   return size;
 }

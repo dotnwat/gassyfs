@@ -1,6 +1,8 @@
 #ifndef COMMON_H
 #define COMMON_H
 #include <gasnet.h>
+#include "address_space.h"
+#include "alloc.h"
 
 #define GASNET_SAFE(fncall) do {                                     \
     int _retval;                                                     \
@@ -16,18 +18,29 @@
     }                                                                \
   } while(0)
 
-#define BLOCK_SIZE 4096
-
-struct Block {
-  gasnet_node_t node;
-  size_t addr;
-  size_t size;
-};
-
 struct gassyfs_opts {
   int rank0_alloc;
   int local_mode;
   size_t heap_size;
+};
+
+struct NodeAlloc {
+  NodeAlloc(Node *n) :
+    node(n), alloc(new Allocator(n->size()))
+  {}
+
+  Node *node;
+  Allocator *alloc;
+};
+
+struct Extent {
+  // logical
+  size_t length;
+
+  // physical
+  NodeAlloc *node;
+  size_t addr;
+  size_t size;
 };
 
 #endif

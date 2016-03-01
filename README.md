@@ -15,34 +15,17 @@ exceeds that of a single node.
 
 # Testing
 
-The file system is regularly tested with the following workloads.
+The file system is regularly tested with a variety of workloads. The following
+workloads are tested for each travis-ci.org build:
 
-```bash
-git clone http://github.com/facebook/rocksdb.git
-cd rocksdb
-make -j5
-make check
-```
+* Run the Tuxera POSIX test suite (test/posix.sh)
+* Build Git and run unit tests (test/git.sh)
+* samtools
 
-```bash
-git clone https://github.com/torvalds/linux.git
-cd linux
-make allmodconfig
-make -j20
-make distclean
-make allyesconfig
-make -j20
-make distclean
-```
+An additional set of larger workloads (in addition to those listed above) are
+run prior to each release:
 
-```bash
-iozone -a
-```
-
-```bash
-git clone --recursive https://github.com/ceph/ceph.git
-cd ceph
-./autogen.sh
-./configure --with-debug
-make -j10
-```
+* Build the Linux kernel (test/kernel.sh)
+* Build the Ceph storage system (test/ceph.sh)
+* Multiple configurations of iozone (test/iozone.sh)
+* Build PostgreSQL and run tests (test/postgres.sh)

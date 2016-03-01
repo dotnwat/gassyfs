@@ -20,7 +20,6 @@
 
 #include "common.h"
 #include "inode.h"
-#include "block_allocator.h"
 #include "gassy_fs.h"
 #include "address_space.h"
 
@@ -222,12 +221,15 @@ static void ll_read(fuse_req_t req, fuse_ino_t ino, size_t size, off_t off,
   GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
   FileHandle *fh = (FileHandle*)fi->fh;
 
-  char buf[1<<20];
-  size_t new_size = std::min(size, sizeof(buf));
+  /*
+   * TODO: if this becomes a performance issue, then we can use a memory pool
+   * to keep a bunch of buffers always allocated and ready to use.
+   */
+  auto buf = std::unique_ptr<char[]>(new char[size]);
 
-  ssize_t ret = fs->Read(fh, off, new_size, buf);
+  ssize_t ret = fs->Read(fh, off, size, buf.get());
   if (ret >= 0)
-    fuse_reply_buf(req, buf, ret);
+    fuse_reply_buf(req, buf.get(), ret);
   else
     fuse_reply_err(req, -ret);
 }
@@ -463,13 +465,18 @@ int main(int argc, char *argv[])
    * Create the address space. When GASNet is being used for storage then only
    * the rank 0 node/process will return from AddressSpace::init.
    */
+  int ret;
   AddressSpace *storage;
-  if (!opts.local_mode)
-    storage = new GasnetAddressSpace;
-  else
-    storage = new LocalAddressSpace;
+  if (!opts.local_mode) {
+    auto s = new GASNetAddressSpace;
+    ret = s->init(&argc, &argv, &opts);
+    storage = s;
+  } else {
+    auto s = new LocalAddressSpace;
+    ret = s->init(&opts);
+    storage = s;
+  }
 
-  int ret = storage->init(&argc, &argv, &opts);
   assert(ret == 0);
 
   std::cout << "Local mode:            " << (opts.local_mode ? "yes" : "no") << std::endl;
@@ -529,8 +536,7 @@ int main(int argc, char *argv[])
   std::cout << std::endl;
   fflush(stdout); // FIXME: std::abc version?
 
-  BlockAllocator *ba = new BlockAllocator(storage);
-  GassyFs *fs = new GassyFs(storage, ba);
+  GassyFs *fs = new GassyFs(storage);
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {
