@@ -29,3 +29,4 @@ run prior to each release:
 * Build the Ceph storage system (test/ceph.sh)
 * Multiple configurations of iozone (test/iozone.sh)
 * Build PostgreSQL and run tests (test/postgres.sh)
+* Build RocksDB and run tests (test/rocksdb.sh)
