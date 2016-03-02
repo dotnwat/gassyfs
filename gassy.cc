@@ -22,6 +22,7 @@
 #include "inode.h"
 #include "gassy_fs.h"
 #include "address_space.h"
+#include "gassyfs_ioctl.h"
 
 /*
  *
@@ -401,6 +402,44 @@ static void ll_fallocate(fuse_req_t req, fuse_ino_t ino, int mode,
 }
 #endif
 
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
+static void ll_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
+    struct fuse_file_info *fi, unsigned flags, const void *in_buf,
+    size_t in_bufsz, size_t out_bufsz)
+{
+  switch (cmd) {
+    case GASSY_IOC_PRINT_STRING:
+      {
+        struct gassy_string s;
+        memcpy(&s, in_buf, sizeof(s));
+        printf("got string: %s\n", s.string);
+        fuse_reply_ioctl(req, 0, NULL, 0);
+      }
+      break;
+    case GASSY_IOC_SETLUA_ATIME:
+      {
+        struct gassy_string s;
+        memcpy(&s, in_buf, sizeof(s));
+        std::string policy(s.string);
+        GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
+        bool ret = fs->SetAtime(ino, policy);
+        fuse_reply_ioctl(req, !ret, NULL, 0);
+      }
+      break;
+    case GASSY_IOC_GETLUA_ATIME:
+      {
+        GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
+        fs->GetAtime(ino);
+        fuse_reply_ioctl(req, 0, NULL, 0);
+      }
+      break;
+
+    default:
+      fuse_reply_err(req, -EINVAL);
+  }
+}
+#endif
+
 enum {
   KEY_HELP,
 };
@@ -522,6 +561,9 @@ int main(int argc, char *argv[])
 #if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 9)
   ll_oper.forget_multi = ll_forget_multi;
   ll_oper.fallocate   = ll_fallocate;
+#endif
+#if FUSE_VERSION >= FUSE_MAKE_VERSION(2, 8)
+  ll_oper.ioctl       = ll_ioctl;
 #endif
 
   /*
