@@ -1,5 +1,6 @@
 #ifndef GASSYFS_IOCTL_H_
 #define GASSYFS_IOCTL_H_
+#include <sys/ioctl.h>
 
 #define GASSY_IOC_MAGIC 0x98
 
