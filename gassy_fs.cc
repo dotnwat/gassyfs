@@ -889,7 +889,9 @@ int GassyFs::Mknod(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
   // directories start with nlink = 2, but according to mknod(2), "Under
   // Linux, mknod() cannot be used to create directories.  One should make
   // directories with mkdir(2).".
-  assert(!in->is_directory());
+  //assert(!in->is_directory());
+  if (in->is_directory())
+    return -EPERM;
 
   std::lock_guard<std::mutex> l(mutex_);
 
