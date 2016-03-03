@@ -435,7 +435,7 @@ static void ll_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
       break;
 
     default:
-      fuse_reply_err(req, -EINVAL);
+      fuse_reply_err(req, EINVAL);
   }
 }
 #endif
