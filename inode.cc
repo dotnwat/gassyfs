@@ -66,6 +66,18 @@ bool Inode::is_regular() const
   return S_ISREG(i_st.st_mode);
 }
 
+std::string Inode::type_name() const
+{
+  if (is_regular())
+    return "regular";
+  else if (is_directory())
+    return "directory";
+  else if (is_symlink())
+    return "symlink";
+  else
+    assert(0);
+}
+
 bool Inode::setlua_atime(std::string policy)
 {
   return lua_atime.assign(policy) == policy;

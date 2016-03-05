@@ -26,6 +26,7 @@ class Inode {
   bool is_directory() const;
   bool is_symlink() const;
   bool is_regular() const;
+  std::string type_name() const;
 
   std::map<off_t, Extent> extents_;
 
