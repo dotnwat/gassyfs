@@ -34,6 +34,13 @@ class InodeIndex {
 
   uint64_t nfiles();
 
+  std::vector<Inode::Ptr> inodes() const {
+    std::vector<Inode::Ptr> ret;
+    for (auto it = refs_.cbegin(); it != refs_.cend(); it++)
+      ret.push_back(it->second.second);
+    return ret;
+  }
+
  private:
   std::unordered_map<fuse_ino_t,
     std::pair<long int, Inode::Ptr>> refs_;

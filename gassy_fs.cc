@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <time.h>
+#include "json.hpp"
 #include "inode.h"
 
 #ifdef HAVE_LUA
@@ -15,6 +16,8 @@
 #include <mach/clock.h>
 #include <mach/mach.h>
 #endif
+
+using json = nlohmann::json;
 
 #ifdef __MACH__
 static inline std::time_t time_now(void)
@@ -1305,4 +1308,86 @@ void GassyFs::GetAtime(fuse_ino_t ino)
   auto in = ino_refs_.inode(ino);
   in->getlua_atime();
   std::cout.flush();
+}
+
+int GassyFs::Checkpoint()
+{
+  json checkpoint;
+
+  std::lock_guard<std::mutex> l(mutex_);
+
+  json nspace;
+  nspace["root_ino"] = FUSE_ROOT_ID;
+
+  std::vector<Inode::Ptr> inodes = ino_refs_.inodes();
+  for (auto in : inodes) {
+
+    // common inode properties
+    json inode_state = {
+      {"ino",         in->ino()},
+      {"st_dev",      in->i_st.st_dev},
+      {"st_mode",     in->i_st.st_mode},
+      {"st_nlink",    in->i_st.st_nlink},
+      {"st_uid",      in->i_st.st_uid},
+      {"st_gid",      in->i_st.st_gid},
+      {"st_rdev",     in->i_st.st_rdev},
+      {"st_size",     in->i_st.st_size},
+      {"st_blksize",  in->i_st.st_blksize},
+      {"st_blocks",   in->i_st.st_blocks},
+      {"st_atime",    in->i_st.st_atime},
+      {"st_mtime",    in->i_st.st_mtime},
+      {"st_ctime",    in->i_st.st_ctime},
+      {"type",        in->type_name()},
+    };
+
+    if (in->is_directory()) {
+      json children = json::array();
+      auto dir = std::static_pointer_cast<DirInode>(in);
+      for (auto it = dir->dentries.begin(); it != dir->dentries.end(); it++) {
+        children.push_back({
+            {"name", it->first},
+            {"ino", it->second->ino()},
+        });
+      }
+      inode_state["children"] = children;
+    } else if (in->is_symlink()) {
+      auto sym = std::static_pointer_cast<SymlinkInode>(in);
+      inode_state["link"] = sym->link;
+    } else if (in->is_regular()) {
+      json extents = json::array();
+      for (auto it = in->extents_.begin(); it != in->extents_.end(); it++) {
+        extents.push_back({
+          {"offset", it->first},
+          {"length", it->second.length},
+          {"nodeid",  it->second.node->node->id()},
+          {"phyaddr", it->second.addr},
+          {"physize", it->second.size},
+        });
+      }
+      inode_state["extents"] = extents;
+    } else
+      assert(0);
+
+    nspace["inodes"].push_back(inode_state);
+  }
+
+  checkpoint["namespace"] = nspace;
+
+  json nodes = json::array();
+  for (auto& na : node_alloc_) {
+    json node;
+
+    node["id"] = na.node->id();
+
+    json alloc;
+    na.alloc->to_json(alloc);
+    node["allocation"] = alloc;
+
+    nodes.push_back(node);
+  }
+
+  checkpoint["nodes"] = nodes;
+
+  std::cout << checkpoint.dump(2) << std::endl;
+  return 0;
 }
