@@ -14,6 +14,8 @@ class Node {
  public:
   typedef void* group_io_handle_t;
 
+  virtual int id() = 0;
+
   // valid address space: [0, size)
   virtual size_t size() = 0;
 

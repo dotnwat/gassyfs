@@ -11,6 +11,9 @@
 #include <deque>
 #include <map>
 #include <errno.h>
+#include "json.hpp"
+
+using json = nlohmann::json;
 
 class Allocator {
  public:
@@ -126,6 +129,21 @@ class Allocator {
       // easy case - nothing was free, so now just our block is
       free_blocks[offset] = size;
     }
+  }
+
+  /*
+   * serialize allocator state to json
+   */
+  void to_json(json& out) {
+    out["alignment"] = alignment;
+    json blocks = json::array();
+    for (auto& entry : free_blocks) {
+      json block = json::object();
+      block["offset"] = entry.first;
+      block["length"] = entry.second;
+      blocks.push_back(block);
+    }
+    out["free_blocks"] = blocks;
   }
 
  private:

@@ -51,6 +51,8 @@ int main(int argc, char **argv)
     op = GASSY_IOC_GETLUA_ATIME;
   else if (!strcmp(cmd, "setlua_atime"))
     op = GASSY_IOC_SETLUA_ATIME;
+  else if (!strcmp(cmd, "checkpoint"))
+    op = GASSY_IOC_CHECKPOINT;
   else {
     std::cerr << "unknown command" << std::endl;
     exit(1);

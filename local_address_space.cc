@@ -5,6 +5,10 @@
 #include <iostream>
 #include "common.h"
 
+/*
+ * TODO: support multiple local address spaces for easier testing that would
+ * resemble a multi-node gasnet setup.
+ */
 class LocalNodeImpl : public Node {
  public:
   LocalNodeImpl(void *base, uintptr_t size) :
@@ -14,6 +18,10 @@ class LocalNodeImpl : public Node {
     std::cout << "local mem: base=" << base
       << " size=" << size << std::endl;
 #endif
+  }
+
+  int id() {
+    return 0;
   }
 
   size_t size() {
