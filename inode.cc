@@ -53,12 +53,17 @@ fuse_ino_t Inode::ino() const
 
 bool Inode::is_directory() const
 {
-  return i_st.st_mode & S_IFDIR;
+  return S_ISDIR(i_st.st_mode);
 }
 
 bool Inode::is_symlink() const
 {
-  return i_st.st_mode & S_IFLNK;
+  return S_ISLNK(i_st.st_mode);
+}
+
+bool Inode::is_regular() const
+{
+  return S_ISREG(i_st.st_mode);
 }
 
 bool Inode::setlua_atime(std::string policy)
