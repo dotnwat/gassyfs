@@ -450,6 +450,7 @@ static struct fuse_opt gassyfs_fuse_opts[] = {
   GASSYFS_OPT("rank0_alloc",     rank0_alloc, 1),
   GASSYFS_OPT("local_mode",      local_mode, 1),
   GASSYFS_OPT("heap_size=%u",    heap_size, 0),
+  GASSYFS_OPT("local_parts=%u",  local_parts, 1),
   FUSE_OPT_KEY("-h",             KEY_HELP),
   FUSE_OPT_KEY("--help",         KEY_HELP),
   FUSE_OPT_END
@@ -462,6 +463,7 @@ static void usage(const char *progname)
 "    -o rank0_alloc          rank 0 should contribute heap\n"
 "    -o local_mode           don't use GASNet (implies -o rank0_alloc)\n"
 "    -o heap_size=N          per-node heap size\n"
+"    -o local_parts=N        number of local \"nodes\" (default: 1)\n"
 );
 }
 
@@ -492,6 +494,7 @@ int main(int argc, char *argv[])
   opts.rank0_alloc = 0;
   opts.local_mode  = 0;
   opts.heap_size   = 512;
+  opts.local_parts = 1;
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
@@ -501,6 +504,7 @@ int main(int argc, char *argv[])
   }
 
   assert(opts.heap_size > 0);
+  assert(opts.local_parts > 0);
 
   /*
    * Create the address space. When GASNet is being used for storage then only
@@ -540,6 +544,11 @@ int main(int argc, char *argv[])
   assert(ret == 0);
 
   std::cout << "Local mode:            " << (opts.local_mode ? "yes" : "no") << std::endl;
+  std::cout << "Local parts:           ";
+  if (opts.local_parts)
+    std::cout << opts.local_parts << std::endl;
+  else
+    std::cout << "n/a" << std::endl;
   std::cout << "Rank 0 allocation:     " << (opts.rank0_alloc ? "yes" : "no") << std::endl;
   std::cout << "Heap size:             " << opts.heap_size << std::endl;
 
