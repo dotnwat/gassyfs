@@ -22,6 +22,7 @@ struct gassyfs_opts {
   int rank0_alloc;
   int local_mode;
   size_t heap_size;
+  int local_parts;
 };
 
 struct NodeAlloc {

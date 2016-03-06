@@ -5,14 +5,10 @@
 #include <iostream>
 #include "common.h"
 
-/*
- * TODO: support multiple local address spaces for easier testing that would
- * resemble a multi-node gasnet setup.
- */
 class LocalNodeImpl : public Node {
  public:
-  LocalNodeImpl(void *base, uintptr_t size) :
-    base_((char*)base), size_(size)
+  LocalNodeImpl(int id, void *base, uintptr_t size) :
+    id_(id), base_((char*)base), size_(size)
   {
 #if 0
     std::cout << "local mem: base=" << base
@@ -21,7 +17,7 @@ class LocalNodeImpl : public Node {
   }
 
   int id() {
-    return 0;
+    return id_;
   }
 
   size_t size() {
@@ -49,6 +45,7 @@ class LocalNodeImpl : public Node {
   }
 
  private:
+  int id_;
   char *base_;
   uintptr_t size_;
 };
@@ -57,15 +54,16 @@ int LocalAddressSpace::init(struct gassyfs_opts *opts)
 {
   const size_t size = opts->heap_size << 20;
 
-  void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
-      MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+  for (int i = 0; i < opts->local_parts; i++) {
+    void *data = mmap(NULL, size, PROT_READ|PROT_WRITE,
+        MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 
-  if (data == MAP_FAILED)
-    return -ENOMEM;
+    if (data == MAP_FAILED)
+      return -ENOMEM;
 
-  LocalNodeImpl *node = new LocalNodeImpl(data, size);
-
-  nodes_.push_back(node);
+    LocalNodeImpl *node = new LocalNodeImpl(i, data, size);
+    nodes_.push_back(node);
+  }
 
   opts->rank0_alloc = 1;
 
