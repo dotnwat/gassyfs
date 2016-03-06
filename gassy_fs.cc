@@ -1316,63 +1316,33 @@ int GassyFs::Checkpoint()
 
   std::lock_guard<std::mutex> l(mutex_);
 
+  /*
+   * serialize the namespace
+   *
+   * 1. a detailed list of all inodes
+   * 2. a pointer to the root inode
+   *
+   * the root inode is identified by a compile-time value. we handle the case
+   * in which this value has changed since making a checkpoint (e.g. loading a
+   * different platform) by re-writing inode numbers during restart.
+   */
   json nspace;
+
+  // root pointer
   nspace["root_ino"] = FUSE_ROOT_ID;
 
-  std::vector<Inode::Ptr> inodes = ino_refs_.inodes();
-  for (auto in : inodes) {
-
-    // common inode properties
-    json inode_state = {
-      {"ino",         in->ino()},
-      {"st_dev",      in->i_st.st_dev},
-      {"st_mode",     in->i_st.st_mode},
-      {"st_nlink",    in->i_st.st_nlink},
-      {"st_uid",      in->i_st.st_uid},
-      {"st_gid",      in->i_st.st_gid},
-      {"st_rdev",     in->i_st.st_rdev},
-      {"st_size",     in->i_st.st_size},
-      {"st_blksize",  in->i_st.st_blksize},
-      {"st_blocks",   in->i_st.st_blocks},
-      {"st_atime",    in->i_st.st_atime},
-      {"st_mtime",    in->i_st.st_mtime},
-      {"st_ctime",    in->i_st.st_ctime},
-      {"type",        in->type_name()},
-    };
-
-    if (in->is_directory()) {
-      json children = json::array();
-      auto dir = std::static_pointer_cast<DirInode>(in);
-      for (auto it = dir->dentries.begin(); it != dir->dentries.end(); it++) {
-        children.push_back({
-            {"name", it->first},
-            {"ino", it->second->ino()},
-        });
-      }
-      inode_state["children"] = children;
-    } else if (in->is_symlink()) {
-      auto sym = std::static_pointer_cast<SymlinkInode>(in);
-      inode_state["link"] = sym->link;
-    } else if (in->is_regular()) {
-      json extents = json::array();
-      for (auto it = in->extents_.begin(); it != in->extents_.end(); it++) {
-        extents.push_back({
-          {"offset", it->first},
-          {"length", it->second.length},
-          {"nodeid",  it->second.node->node->id()},
-          {"phyaddr", it->second.addr},
-          {"physize", it->second.size},
-        });
-      }
-      inode_state["extents"] = extents;
-    } else
-      assert(0);
-
-    nspace["inodes"].push_back(inode_state);
+  // all inodes
+  json inodes = json::array();
+  for (auto in : ino_refs_.inodes()) {
+    json inode = json::object();
+    in->to_json(inode);
+    nspace["inodes"].push_back(inode);
   }
-
   checkpoint["namespace"] = nspace;
 
+  /*
+   * serialize the storage information
+   */
   json nodes = json::array();
   for (auto& na : node_alloc_) {
     json node;
@@ -1385,9 +1355,9 @@ int GassyFs::Checkpoint()
 
     nodes.push_back(node);
   }
-
   checkpoint["nodes"] = nodes;
 
   std::cout << checkpoint.dump(2) << std::endl;
+
   return 0;
 }
