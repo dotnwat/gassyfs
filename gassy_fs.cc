@@ -4,6 +4,9 @@
 #include <cstring>
 #include <iostream>
 #include <string>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <time.h>
 #include "json.hpp"
 #include "inode.h"
@@ -1312,6 +1315,9 @@ void GassyFs::GetAtime(fuse_ino_t ino)
 
 int GassyFs::Checkpoint()
 {
+  std::string checkpoint_id = boost::uuids::to_string(
+      boost::uuids::random_generator()());
+
   json checkpoint;
 
   std::lock_guard<std::mutex> l(mutex_);
@@ -1348,6 +1354,7 @@ int GassyFs::Checkpoint()
     json node;
 
     node["id"] = na.node->id();
+    na.node->checkpoint(checkpoint_id);
 
     json alloc;
     na.alloc->to_json(alloc);
