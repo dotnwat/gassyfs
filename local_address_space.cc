@@ -86,24 +86,6 @@ void LocalNodeImpl::checkpoint(const std::string& checkpoint_id)
     assert(0);
   }
 
-#if 0
-  fallocate(fd, 0, 0, size());
-  lseek(fd, 0, SEEK_SET);
-
-  char *cur = base_;
-  size_t left = size();
-
-  while (left) {
-    size_t done = std::min(left, 1ULL<<30);
-    ssize_t ret = write(fd, cur, done);
-    if (ret < 0) {
-      perror("write");
-      assert(0);
-    }
-    left -= ret;
-    cur += ret;
-  }
-#else
   ret = ftruncate(fd, (off_t)size());
   if (ret) {
     perror("ftruncate");
@@ -125,7 +107,6 @@ void LocalNodeImpl::checkpoint(const std::string& checkpoint_id)
 
   fsync(fd);
   close(fd);
-#endif
 }
 
 int LocalAddressSpace::init(struct gassyfs_opts *opts)

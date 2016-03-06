@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <boost/uuid/uuid.hpp>
@@ -1364,7 +1365,22 @@ int GassyFs::Checkpoint()
   }
   checkpoint["nodes"] = nodes;
 
-  std::cout << checkpoint.dump(2) << std::endl;
+  checkpoint["id"] = checkpoint_id;
+
+  /*
+   * save checkpoint metadata
+   */
+  char checkpoint_dir[PATH_MAX];
+  sprintf(checkpoint_dir, "/home/nwatkins/gassyfs-checkpoint");
+
+  char checkpoint_state_file[PATH_MAX];
+  sprintf(checkpoint_state_file, "%s/%s.head",
+      checkpoint_dir, checkpoint_id.c_str());
+
+  std::ofstream out(checkpoint_state_file, std::ios::out | std::ios::trunc);
+  out << checkpoint.dump(2);
+  out.flush();
+  out.close();
 
   return 0;
 }
