@@ -31,6 +31,7 @@ class Node {
 
   // durability
   virtual void checkpoint(const std::string& checkpoint_id) = 0;
+  virtual void restore(const std::string& checkpoint_id, int *prev_id) = 0;
 };
 
 /*

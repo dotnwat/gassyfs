@@ -48,17 +48,19 @@ class GASNetNodeImpl : public Node {
     handles->push_back(h);
   }
 
-  void checkpoint(const std::string& checkpoint_id);
+  void checkpoint(const std::string& checkpoint_id) {
+    assert(0);
+  }
+
+  void restore(const std::string& checkpoint_id, int *prev_id) {
+    assert(0);
+  }
 
  private:
   gasnet_node_t node_;
   char *base_;
   uintptr_t size_;
 };
-
-void GASNetNodeImpl::checkpoint(const std::string& checkpoint_id)
-{
-}
 
 Node::group_io_handle_t GASNetAddressSpace::group_io_start()
 {

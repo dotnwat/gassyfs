@@ -15,7 +15,7 @@
 
 class GassyFs {
  public:
-  explicit GassyFs(AddressSpace *storage);
+  GassyFs(AddressSpace *storage, json *checkpointp);
 
   int Create(fuse_ino_t parent_ino, const std::string& name, mode_t mode,
       int flags, struct stat *st, FileHandle **fhp, uid_t uid, gid_t gid);

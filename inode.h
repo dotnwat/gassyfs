@@ -37,6 +37,7 @@ class Inode {
   int alloc_node;
 
   virtual void to_json(json& out);
+  static Inode::Ptr from_json(json& state);
 
  private:
   bool ino_set_;

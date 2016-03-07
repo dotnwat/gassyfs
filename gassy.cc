@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <string>
 #include <deque>
+#include <fstream>
 #include <vector>
 #include <iostream>
 #include <mutex>
@@ -459,6 +460,7 @@ static struct fuse_opt gassyfs_fuse_opts[] = {
   GASSYFS_OPT("local_mode",      local_mode, 1),
   GASSYFS_OPT("heap_size=%u",    heap_size, 0),
   GASSYFS_OPT("local_parts=%u",  local_parts, 1),
+  GASSYFS_OPT("checkpoint_id=%s", checkpoint_id, 0),
   FUSE_OPT_KEY("-h",             KEY_HELP),
   FUSE_OPT_KEY("--help",         KEY_HELP),
   FUSE_OPT_END
@@ -472,6 +474,7 @@ static void usage(const char *progname)
 "    -o local_mode           don't use GASNet (implies -o rank0_alloc)\n"
 "    -o heap_size=N          per-node heap size\n"
 "    -o local_parts=N        number of local \"nodes\" (default: 1)\n"
+"    -o checkpoint_id=ID     name of checkpoint to restore\n"
 );
 }
 
@@ -501,6 +504,8 @@ int main(int argc, char *argv[])
   opts.local_mode  = 0;
   opts.heap_size   = 512;
   opts.local_parts = 1;
+  opts.checkpoint_id = NULL;
+  opts.checkpoint_state = NULL;
 
   struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
@@ -511,6 +516,31 @@ int main(int argc, char *argv[])
 
   assert(opts.heap_size > 0);
   assert(opts.local_parts > 0);
+
+  /*
+   * restore from checkpoint? read up the metadata that describes the
+   * checkpoint. it will be used to restore data structures.
+   */
+  if (opts.checkpoint_id) {
+    char checkpoint_dir[PATH_MAX];
+    sprintf(checkpoint_dir, "/home/nwatkins/gassyfs-checkpoint");
+
+    char checkpoint_state_file[PATH_MAX];
+    sprintf(checkpoint_state_file, "%s/%s.head",
+        checkpoint_dir, opts.checkpoint_id);
+
+    struct stat st;
+    int ret = stat(checkpoint_state_file, &st);
+    if (ret) {
+      perror("checkpoint: stat");
+      assert(0);
+    }
+
+    std::ifstream in(checkpoint_state_file, std::ios::in);
+    opts.checkpoint_state = new json;
+    in >> *opts.checkpoint_state;
+    in.close();
+  }
 
   /*
    * Create the address space. When GASNet is being used for storage then only
@@ -595,7 +625,10 @@ int main(int argc, char *argv[])
   std::cout << std::endl;
   fflush(stdout); // FIXME: std::abc version?
 
-  GassyFs *fs = new GassyFs(storage);
+  GassyFs *fs = new GassyFs(storage, opts.checkpoint_state);
+
+  if (opts.checkpoint_state)
+    delete opts.checkpoint_state;
 
   if (fuse_parse_cmdline(&args, &mountpoint, NULL, NULL) != -1 &&
       (ch = fuse_mount(mountpoint, &args)) != NULL) {

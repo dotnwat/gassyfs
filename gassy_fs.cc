@@ -76,9 +76,52 @@ int lua_policy(std::string interface)
 }
 #endif
 
-GassyFs::GassyFs(AddressSpace *storage) :
+GassyFs::GassyFs(AddressSpace *storage, json *checkpointp) :
   next_ino_(FUSE_ROOT_ID + 1), storage_(storage)
 {
+  // checkpoint id (if set)
+  std::string cp_id;
+  if (checkpointp) {
+    json& cp = *checkpointp;
+    cp_id = cp["id"];
+  }
+
+  /*
+   *
+   */
+  std::map<int, int> node_id_map;
+  total_bytes_ = 0;
+  for (Node *node : storage_->nodes()) {
+    // Node::restore does nothing if cp_id is empty
+    int prev_node_id;
+    node->restore(cp_id, &prev_node_id);
+    node_id_map[prev_node_id] = node->id();
+
+    NodeAlloc na(node);
+    node_alloc_.push_back(na);
+    total_bytes_ += node->size();
+
+    if (checkpointp) {
+      json& cp = *checkpointp;
+      na.alloc->restore(cp["nodes"][prev_node_id]["allocation"]);
+    }
+  }
+  avail_bytes_ = total_bytes_;
+  node_alloc_count_ = node_alloc_.size();
+
+  /*
+   * rebuild all inodes from checkpoint
+   */
+  if (checkpointp) {
+    json& cp = *checkpointp;
+    for (auto incp : cp["inodes"]) {
+      //auto inode = ;
+      //ino_refs_.add(inode);
+    }
+  }
+
+
+
   std::time_t now = time_now();
 
   auto root = std::make_shared<DirInode>(now,
@@ -88,15 +131,6 @@ GassyFs::GassyFs(AddressSpace *storage) :
 
   // bump kernel inode cache reference count
   ino_refs_.add(root);
-
-  total_bytes_ = 0;
-  for (Node *node : storage_->nodes()) {
-    NodeAlloc na(node);
-    node_alloc_.push_back(na);
-    total_bytes_ += node->size();
-  }
-  avail_bytes_ = total_bytes_;
-  node_alloc_count_ = node_alloc_.size();
 
   memset(&stat, 0, sizeof(stat));
   stat.f_fsid = 983983;
@@ -1361,7 +1395,7 @@ int GassyFs::Checkpoint()
     na.alloc->to_json(alloc);
     node["allocation"] = alloc;
 
-    nodes.push_back(node);
+    nodes[na.node->id()] = node;
   }
   checkpoint["nodes"] = nodes;
 

@@ -93,6 +93,15 @@ std::string Inode::getlua_atime()
   return lua_atime.c_str();
 }
 
+Inode::Ptr Inode::from_json(json& state)
+{
+  if (state["type"] == "regular") {
+  } else if (state["type"] == "directory") {
+  } else if (state["type"] == "symlink") {
+  } else
+    assert(0);
+}
+
 void Inode::to_json(json& inode)
 {
   inode["ino"]        =  ino();

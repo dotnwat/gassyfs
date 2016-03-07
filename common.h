@@ -1,6 +1,7 @@
 #ifndef COMMON_H
 #define COMMON_H
 #include <gasnet.h>
+#include "json.hpp"
 #include "address_space.h"
 #include "alloc.h"
 
@@ -23,6 +24,9 @@ struct gassyfs_opts {
   int local_mode;
   size_t heap_size;
   int local_parts;
+
+  char *checkpoint_id;
+  json *checkpoint_state;
 };
 
 struct NodeAlloc {

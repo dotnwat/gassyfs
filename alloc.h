@@ -146,6 +146,17 @@ class Allocator {
     out["free_blocks"] = blocks;
   }
 
+  /*
+   * restore from json
+   */
+  void restore(json& cp) {
+    alignment = cp["alignment"];
+    free_blocks.clear();
+    for (auto& entry : cp["free_blocks"]) {
+      free_blocks[entry["offset"]] = entry["length"];
+    }
+  }
+
  private:
   size_t alignment;
   std::map<off_t, off_t> free_blocks;
