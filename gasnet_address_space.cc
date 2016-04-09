@@ -1,7 +1,10 @@
 #include "address_space.h"
 #include <cassert>
 #include <iostream>
+#include <sstream>
 #include <sys/mman.h>
+#include <sys/syscall.h>
+#include <sys/types.h>
 #include <gasnet.h>
 #include <gasnet_tools.h>
 #include "common.h"
@@ -98,8 +101,6 @@ int GASNetAddressSpace::init(int *argc, char ***argv,
 {
   std::cout << "gasnet segment = everything" << std::endl;
 
-  GASNET_SAFE(gasnet_init(argc, argv));
-
   // handler for sending segment info to rank 0
   gasnet_handlerentry_t handlers[1];
   handlers[0].index = AM_SEGINFO;
@@ -193,10 +194,6 @@ int GASNetAddressSpace::init(int *argc, char ***argv,
 int GASNetAddressSpace::init(int *argc, char ***argv,
     struct gassyfs_opts *opts)
 {
-  std::cout << "gasnet segment = fast|large" << std::endl;
-
-  GASNET_SAFE(gasnet_init(argc, argv));
-
   // how much this rank will try to allocate
   size_t segsz = gasnet_getMaxLocalSegmentSize();
 
@@ -216,14 +213,20 @@ int GASNetAddressSpace::init(int *argc, char ***argv,
   gasnet_seginfo_t segments[gasnet_nodes()];
   GASNET_SAFE(gasnet_getSegmentInfo(segments, gasnet_nodes()));
 
+  //std::cout << "before service loop: " << gasnet_mynode() << std::endl;
+
   // all nodes except rank 0 can start serving memory
   if (gasnet_mynode()) {
+    //std::cout << "enter service loop: " << gasnet_mynode() << std::endl;
     gasnet_barrier_notify(0, GASNET_BARRIERFLAG_ANONYMOUS);
     gasnet_barrier_wait(0, GASNET_BARRIERFLAG_ANONYMOUS);
+    //std::cout << "exit service loop: " << gasnet_mynode() << std::endl;
     gasnet_exit(0);
     assert(0);
     return 0;
   }
+
+  //std::cout << "after service loop: " << gasnet_mynode() << std::endl;
 
   size_t total = 0;
   size_t num_nodes = 0;

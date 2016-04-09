@@ -484,6 +484,8 @@ static int gassyfs_opt_proc(void *data, const char *arg, int key,
 
 int main(int argc, char *argv[])
 {
+  GASNET_SAFE(gasnet_init(&argc, &argv));
+
   struct gassyfs_opts opts;
 
   // option defaults
@@ -491,7 +493,7 @@ int main(int argc, char *argv[])
   opts.local_mode  = 0;
   opts.heap_size   = 512;
 
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+  struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
   if (fuse_opt_parse(&args, &opts, gassyfs_fuse_opts,
         gassyfs_opt_proc) == -1) {
@@ -515,6 +517,25 @@ int main(int argc, char *argv[])
     ret = s->init(&opts);
     storage = s;
   }
+
+  // FIXME: this is a hack to get things working with gasnetrun_ibv. apparently
+  // when running with this launcher there is an additional process that's created.
+  //
+  // example with -np 2:
+  // rank0: two process, A and B
+  // rank1: one process, C
+  //
+  // Process A: argc=1, Process B: argc=8
+  // Process B: does not exist gasnet_init
+  // Process A: exits gasnet_init as node 0
+  // Process A: argc/argv is patched with correct args
+  //
+  // The problem is that fuse was holding references to argc/argv before it was patched
+  // and became node 0. may be as easy as calling gasnet_init very early, but that needs
+  // to be called before we find out if we want local mode or not, so it can't fail when called without
+  // a launcher. perhaps we can make this approach robust, or just compile multiple versions
+  // of gassy
+  // args = FUSE_ARGS_INIT(argc, argv);
 
   assert(ret == 0);
 
