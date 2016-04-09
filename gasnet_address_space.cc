@@ -15,6 +15,10 @@ class GASNetNodeImpl : public Node {
     node_(node), base_((char*)base), size_(size)
   {}
 
+  int id() {
+    return node_;
+  }
+
   size_t size() {
     return size_;
   }

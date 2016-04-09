@@ -16,6 +16,10 @@ class LocalNodeImpl : public Node {
 #endif
   }
 
+  int id() {
+    return 0;
+  }
+
   size_t size() {
     return size_;
   }
