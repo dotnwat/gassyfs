@@ -1,6 +1,7 @@
 #ifndef GASSYFS_ADDRESS_SPACE_H_
 #define GASSYFS_ADDRESS_SPACE_H_
 #include <cstddef>
+#include <string>
 #include <vector>
 
 struct gassyfs_opts;
@@ -27,6 +28,10 @@ class Node {
       void *src, size_t len) = 0;
   virtual void aio_write(group_io_handle_t handle, void *dst,
       void *src, size_t len) = 0;
+
+  // durability
+  virtual void checkpoint(const std::string& checkpoint_dir,
+          const std::string& checkpoint_id) = 0;
 };
 
 /*

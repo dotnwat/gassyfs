@@ -1,6 +1,7 @@
 #include "inode.h"
 #include <cassert>
 #include <fuse.h>
+#include "json.hpp"
 #include "gassy_fs.h"
 #include "common.h"
 
@@ -76,6 +77,7 @@ std::string Inode::type_name() const
     return "symlink";
   else
     assert(0);
+  assert(0);
 }
 
 bool Inode::setlua_atime(std::string policy)
@@ -90,4 +92,59 @@ std::string Inode::getlua_atime()
     printf("atime policy: \n===\n%s===\n", lua_atime.c_str());
   std::string ret(lua_atime.c_str());
   return lua_atime.c_str();
+}
+
+void Inode::to_json(json& inode)
+{
+  inode["ino"]        =  ino();
+  inode["st_dev"]     =  i_st.st_dev;
+  inode["st_mode"]    =  i_st.st_mode;
+  inode["st_nlink"]   =  i_st.st_nlink;
+  inode["st_uid"]     =  i_st.st_uid;
+  inode["st_gid"]     =  i_st.st_gid;
+  inode["st_rdev"]    =  i_st.st_rdev;
+  inode["st_size"]    =  i_st.st_size;
+  inode["st_blksize"] =  i_st.st_blksize;
+  inode["st_blocks"]  =  i_st.st_blocks;
+  inode["st_atime"]   =  i_st.st_atime;
+  inode["st_mtime"]   =  i_st.st_mtime;
+  inode["st_ctime"]   =  i_st.st_ctime;
+  inode["type"]       =  type_name();
+
+  // avoid special case with RegInode type
+  if (is_regular()) {
+    json extents = json::array();
+    for (auto it : extents_) {
+      extents.push_back({
+        {"offset", it.first},
+        {"length", it.second.length},
+        {"nodeid",  it.second.node->node->id()},
+        {"phyaddr", it.second.addr},
+        {"physize", it.second.size},
+      });
+    }
+    inode["extents"] = extents;
+  } else
+    assert(is_directory() || is_symlink());
+}
+
+void DirInode::to_json(json& inode)
+{
+  Inode::to_json(inode);
+
+  json children = json::array();
+  for (auto entry : dentries) {
+    children.push_back({
+      {"name", entry.first},
+      {"ino", entry.second->ino()},
+    });
+  }
+  inode["children"] = children;
+}
+
+void SymlinkInode::to_json(json& inode)
+{
+  Inode::to_json(inode);
+
+  inode["link"] = link;
 }

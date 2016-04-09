@@ -6,6 +6,7 @@
 #include <vector>
 #include <fuse.h>
 #include <fuse_lowlevel.h>
+#include "json.hpp"
 #include "common.h"
 
 class GassyFs;
@@ -35,6 +36,8 @@ class Inode {
 
   int alloc_node;
 
+  virtual void to_json(json& out);
+
  private:
   bool ino_set_;
   fuse_ino_t ino_;
@@ -55,6 +58,7 @@ class DirInode : public Inode {
       i_st.st_mode = S_IFDIR | mode;
       i_st.st_blocks = 1;
     }
+  virtual void to_json(json& out);
   dir_t dentries;
 };
 
@@ -68,6 +72,7 @@ class SymlinkInode : public Inode {
       this->link = link;
       i_st.st_size = link.length();
     }
+  virtual void to_json(json& out);
   std::string link;
 };
 

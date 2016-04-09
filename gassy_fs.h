@@ -82,6 +82,9 @@ class GassyFs {
   bool SetAtime(fuse_ino_t ino, const std::string& s);
   void GetAtime(fuse_ino_t ino);
 
+  int Checkpoint(const std::string& dir,
+          std::string& checkpoint_id);
+
  private:
   int Truncate(Inode::Ptr in, off_t newsize, uid_t uid, gid_t gid);
   ssize_t Write(Inode::Ptr in, off_t offset, size_t size, const char *buf);

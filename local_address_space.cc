@@ -1,10 +1,17 @@
 #include "address_space.h"
 #include <cassert>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
 #include <gasnet.h>
 #include <iostream>
 #include "common.h"
 
+/*
+ * TODO: support multiple local address spaces for easier testing that would
+ * resemble a multi-node gasnet setup.
+ */
 class LocalNodeImpl : public Node {
  public:
   LocalNodeImpl(int id, void *base, uintptr_t size) :
@@ -44,11 +51,69 @@ class LocalNodeImpl : public Node {
     return write(dst, src, len);
   }
 
+  void checkpoint(const std::string& checkpoint_dir,
+          const std::string& checkpoint_id);
+
  private:
   int id_;
   char *base_;
   uintptr_t size_;
 };
+
+void LocalNodeImpl::checkpoint(const std::string& checkpoint_dir,
+        const std::string& checkpoint_id)
+{
+  /*
+   * ensure a directory exists to store the checkpoint. each node uses a
+   * directory with the path /checkpoint/path/node-{id}/.
+   *
+   * TODO:
+   *  - configurable paths
+   *  - directory creation is buggy/racy
+   */
+  char nodedir[PATH_MAX];
+  sprintf(nodedir, "%s/node-%d", checkpoint_dir.c_str(), id());
+
+  int ret = mkdir(nodedir, 0775);
+  if (ret && errno != EEXIST) {
+    perror("mkdir");
+    assert(0);
+  }
+
+  /*
+   * create file to store checkpoint
+   */
+  char cp_bin_path[PATH_MAX];
+  sprintf(cp_bin_path, "%s/%s.bin", nodedir, checkpoint_id.c_str());
+
+  int fd = open(cp_bin_path, O_RDWR | O_CREAT | O_EXCL, 0660);
+  if (fd < 0) {
+    perror("open");
+    assert(0);
+  }
+
+  ret = ftruncate(fd, (off_t)size());
+  if (ret) {
+    perror("ftruncate");
+    assert(0);
+  }
+
+  void *bin_map = mmap(0, size(), PROT_WRITE, MAP_SHARED, fd, 0);
+  assert(bin_map != MAP_FAILED);
+
+  memcpy(bin_map, base_, size());
+
+  ret = msync(bin_map, size(), MS_SYNC);
+  if (ret) {
+    perror("msync");
+    assert(0);
+  }
+
+  munmap(bin_map, size());
+
+  fsync(fd);
+  close(fd);
+}
 
 int LocalAddressSpace::init(struct gassyfs_opts *opts)
 {

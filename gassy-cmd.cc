@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cassert>
 #include <fstream>
 #include <streambuf>
 #include <sys/ioctl.h>
@@ -20,6 +21,7 @@ int main(int argc, char **argv)
     std::cerr << "    print_string  print a string inside GassyFS" << std::endl;
     std::cerr << "    setlua_atime  set the policy for setting the atime" << std::endl;
     std::cerr << "    getlua_atime  print the policy for setting the atime" << std::endl;
+    std::cerr << "    checkpoint    make a checkpoint" << std::endl;
     std::cerr << "  where policy is the Lua file to inject" << std::endl;
     exit(1);
   }
@@ -33,6 +35,7 @@ int main(int argc, char **argv)
   }
 
   struct gassy_string s;
+#if 0
   if (argc > 3) {
     std::ifstream ifs(argv[3]);
     std::string line, file;
@@ -43,6 +46,7 @@ int main(int argc, char **argv)
     memset(&s, 0, file.length());
     sprintf(s.string, "%s", file.c_str());
   }
+#endif
 
   int op = -1;
   if (!strcmp(cmd, "print_string"))
@@ -51,7 +55,13 @@ int main(int argc, char **argv)
     op = GASSY_IOC_GETLUA_ATIME;
   else if (!strcmp(cmd, "setlua_atime"))
     op = GASSY_IOC_SETLUA_ATIME;
-  else {
+  else if (!strcmp(cmd, "checkpoint")) {
+    op = GASSY_IOC_CHECKPOINT;
+    assert(argc == 4);
+    memset(&s, 0, sizeof(s));
+    sprintf(s.string, "%s", argv[3]);
+    std::cout << "checkpoint path: " << s.string << std::endl;
+  } else {
     std::cerr << "unknown command" << std::endl;
     exit(1);
   }
@@ -59,6 +69,9 @@ int main(int argc, char **argv)
   int ret = ioctl(fd, op, &s);
   if (ret == -1)
     perror("ioctl failed");
+
+  if (!strcmp(cmd, "checkpoint"))
+      std::cout << "checkpoint id: " << s.string << std::endl;
 
   close(fd);
 

@@ -2,9 +2,14 @@
 #include <algorithm>
 #include <cassert>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <string>
+#include <boost/uuid/uuid.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <boost/uuid/uuid_io.hpp>
 #include <time.h>
+#include "json.hpp"
 #include "inode.h"
 
 #ifdef HAVE_LUA
@@ -15,6 +20,8 @@
 #include <mach/clock.h>
 #include <mach/mach.h>
 #endif
+
+using json = nlohmann::json;
 
 #ifdef __MACH__
 static inline std::time_t time_now(void)
@@ -1305,4 +1312,76 @@ void GassyFs::GetAtime(fuse_ino_t ino)
   auto in = ino_refs_.inode(ino);
   in->getlua_atime();
   std::cout.flush();
+}
+
+int GassyFs::Checkpoint(const std::string& checkpoint_dir,
+        std::string& id)
+{
+  std::string checkpoint_id = boost::uuids::to_string(
+      boost::uuids::random_generator()());
+
+  // output param
+  id = checkpoint_id;
+
+  json checkpoint;
+
+  std::lock_guard<std::mutex> l(mutex_);
+
+  /*
+   * serialize the namespace
+   *
+   * 1. a detailed list of all inodes
+   * 2. a pointer to the root inode
+   *
+   * the root inode is identified by a compile-time value. we handle the case
+   * in which this value has changed since making a checkpoint (e.g. loading a
+   * different platform) by re-writing inode numbers during restart.
+   */
+  json nspace;
+
+  // root pointer
+  nspace["root_ino"] = FUSE_ROOT_ID;
+
+  // all inodes
+  json inodes = json::array();
+  for (auto in : ino_refs_.inodes()) {
+    json inode = json::object();
+    in->to_json(inode);
+    nspace["inodes"].push_back(inode);
+  }
+  checkpoint["namespace"] = nspace;
+
+  /*
+   * serialize the storage information
+   */
+  json nodes = json::array();
+  for (auto& na : node_alloc_) {
+    json node;
+
+    node["id"] = na.node->id();
+    na.node->checkpoint(checkpoint_dir, checkpoint_id);
+
+    json alloc;
+    na.alloc->to_json(alloc);
+    node["allocation"] = alloc;
+
+    nodes.push_back(node);
+  }
+  checkpoint["nodes"] = nodes;
+
+  checkpoint["id"] = checkpoint_id;
+
+  /*
+   * save checkpoint metadata
+   */
+  char checkpoint_state_file[PATH_MAX];
+  sprintf(checkpoint_state_file, "%s/%s.head",
+      checkpoint_dir.c_str(), checkpoint_id.c_str());
+
+  std::ofstream out(checkpoint_state_file, std::ios::out | std::ios::trunc);
+  out << checkpoint.dump(2);
+  out.flush();
+  out.close();
+
+  return 0;
 }

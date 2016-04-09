@@ -407,7 +407,23 @@ static void ll_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
     struct fuse_file_info *fi, unsigned flags, const void *in_buf,
     size_t in_bufsz, size_t out_bufsz)
 {
+  GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
+
   switch (cmd) {
+    case GASSY_IOC_CHECKPOINT:
+      {
+        struct gassy_string s;
+        memcpy(&s, in_buf, sizeof(s));
+        std::cout << "checkpoint request: path: " << s.string << std::endl;
+        std::string id;
+        fs->Checkpoint(s.string, id);
+        memset(&s, 0, sizeof(s));
+        sprintf(s.string, "%s", id.c_str());
+        std::cout << "checkpoint id: " << s.string << std::endl;
+        fuse_reply_ioctl(req, 0, &s, sizeof(s));
+      }
+      break;
+
     case GASSY_IOC_PRINT_STRING:
       {
         struct gassy_string s;
@@ -421,14 +437,12 @@ static void ll_ioctl(fuse_req_t req, fuse_ino_t ino, int cmd, void *arg,
         struct gassy_string s;
         memcpy(&s, in_buf, sizeof(s));
         std::string policy(s.string);
-        GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
         bool ret = fs->SetAtime(ino, policy);
         fuse_reply_ioctl(req, !ret, NULL, 0);
       }
       break;
     case GASSY_IOC_GETLUA_ATIME:
       {
-        GassyFs *fs = (GassyFs*)fuse_req_userdata(req);
         fs->GetAtime(ino);
         fuse_reply_ioctl(req, 0, NULL, 0);
       }
