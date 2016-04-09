@@ -3,7 +3,11 @@
 set -x
 set -e
 
-if [ "$USE_LOCAL_MODE" != "1" ]; then
+# temporary hack for local mode in which we still need to launch gassy using
+# the gasnet launcher. gasnet isn't actually used in this case. this will be
+# fixed in a future version.
+#if [ "$USE_LOCAL_MODE" != "1" ]; then
+if [ "0" != "1" ]; then
   # password-less ssh to localhost
   ssh-keygen -f $HOME/.ssh/id_rsa -t rsa -N ''
   cat ~/.ssh/id_rsa.pub >> ~/.ssh/authorized_keys
@@ -32,7 +36,8 @@ sudo cat /etc/fuse.conf || true
 
 mkdir mount
 if [ "$USE_LOCAL_MODE" = "1" ]; then
-  ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc -o local_mode -o heap_size=1024 &
+  # temp hack for local mode
+  SSH_SERVERS="localhost" /usr/local/bin/amudprun -np 1 ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc -o local_mode -o heap_size=1024 &
 else
   SSH_SERVERS="localhost localhost" /usr/local/bin/amudprun -np 2 ./gassy mount -o allow_other -o fsname=gassy -o atomic_o_trunc -o rank0_alloc &
 fi
