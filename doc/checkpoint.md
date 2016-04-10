@@ -18,3 +18,5 @@ Create a checkpoint
 checkpoint path: /gassyfs-checkpoint
 checkpoint id: 3db236bd-ef33-4f02-8130-dfac9db79c1b
 ```
+
+* Only works in local mode right now
